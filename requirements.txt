@@ -1,0 +1,6 @@
+gradio
+langchain
+langchain-openai
+sqlglot
+openai
+python-dotenv
