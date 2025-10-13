@@ -1,6 +1,22 @@
-# NL2SQL Copilot — Prototype
+---
+title: NL2SQL Copilot
+emoji: 🧠
+colorFrom: indigo
+colorTo: purple
+license: mit
+tags:
+  - gradio
+  - langchain
+  - text-to-sql
+  - demo
+  - sql
+---
+# 🧠 NL2SQL Copilot — Prototype
 
 A minimal **Text-to-SQL Copilot** built with **LangChain + Gradio**, designed to translate natural language questions into **safe SQL** and run them on a **read-only SQLite** database.
+
+👉 [Live Demo on Hugging Face Spaces](https://huggingface.co/spaces/melikakheirieh/nl2sql-copilot-prototype)
+
 
 > **Status:** Prototype (v0.1). This demonstrates structure and UX; advanced safety/verification pipelines are planned.
 
