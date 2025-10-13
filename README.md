@@ -29,9 +29,7 @@ nl2sql-copilot-prototype/
 ├─ .env.example
 ├─ .gitignore
 └─ README.md
-└─ db/
-   ├─ Chinook_Sqlite.sqlite
-   └─ WMSales.sqlite
+
 ```
 ## 🧩 Database Samples
 
