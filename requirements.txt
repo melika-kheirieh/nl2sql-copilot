@@ -4,3 +4,4 @@ langchain-openai
 sqlglot
 openai
 python-dotenv
+dotenv
