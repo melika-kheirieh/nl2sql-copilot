@@ -1,13 +1,3 @@
----
-title: NL2SQL Copilot
-emoji: 🧠
-colorFrom: indigo
-colorTo: purple
-sdk: gradio
-python_version: "3.11"
-app_file: app.py
-pinned: false
----
 # NL2SQL Copilot — Prototype
 
 A minimal **Text-to-SQL Copilot** built with **LangChain + Gradio**, designed to translate natural language questions into **safe SQL** and run them on a **read-only SQLite** database.
