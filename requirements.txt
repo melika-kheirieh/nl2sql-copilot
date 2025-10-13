@@ -1,6 +1,7 @@
 gradio
 langchain
 langchain-openai
+langchain_community
 sqlglot
 openai
 python-dotenv
