@@ -29,8 +29,53 @@ nl2sql-copilot-prototype/
 ├─ .env.example
 ├─ .gitignore
 └─ README.md
+└─ db/
+   ├─ Chinook_Sqlite.sqlite
+   └─ WMSales.sqlite
 ```
+## 🧩 Database Samples
 
+Two example SQLite databases are included in the `db/` folder for quick testing:
+
+| File | Description | Download |
+|------|--------------|-----------|
+| **Chinook_Sqlite.sqlite** | Classic sample DB with artists, albums, and tracks (music store example). | [⬇️ Download](https://github.com/melika-kheirieh/nl2sql-copilot-prototype/raw/main/db/Chinook_Sqlite.sqlite) |
+| **WMSales.sqlite** | Simple sales database (for demoing aggregate and filter queries). | [⬇️ Download](https://github.com/melika-kheirieh/nl2sql-copilot-prototype/raw/main/db/WMSales.sqlite) |
+
+You can use them directly in the Gradio UI by uploading one of these files, or reference them in code for local runs.
+
+---
+
+### 🧠 Sample Questions for *Chinook_Sqlite.sqlite*
+Try asking your copilot questions like:
+
+1. “List the top 5 artists by total track count.”  
+2. “Which album has the most tracks?”  
+3. “Show all tracks longer than 6 minutes.”  
+4. “Find the average track length by genre.”
+5. “Show total invoice amount by billing country.”
+6. “Top 10 most popular genres by number of tracks.”
+7. “How many customers have purchased Jazz albums?”
+8. “Show the total revenue by employee (sales support).”
+9. “List customers who spent more than $100.” 
+10. “Which customers are from Canada?”  
+
+
+---
+
+### 📊 Sample Questions for *WMSales.sqlite*
+You can try:
+
+1. “Show total sales per month in 2024.”  
+2. “List the top 10 customers by revenue.”  
+3. “Which product category had the highest sales this year?”  
+4. “Find the average unit price per product.”  
+5. “Show all orders placed in the last 30 days.”  
+6. “List total sales by region and salesperson.”  
+7. “What is the best-selling product overall?”  
+8. “Show total discount given per month.”  
+9. “Find customers who made more than 5 purchases.”  
+10. “What’s the total revenue by payment method?”
 ---
 
 ## ⚙️ Requirements
