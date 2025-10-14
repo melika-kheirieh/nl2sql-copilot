@@ -119,6 +119,7 @@ Respond in this exact JSON format:
 
 
 def make_sql_chain(sql_db: SQLDatabase):
+    assert hasattr(sql_db, "get_table_info"), "Expected LangChain SQLDatabase"
     llm = ChatOpenAI(model=LLM_MODEL, temperature=LLM_TEMPERATURE)
     chain = create_sql_query_chain(llm, sql_db, prompt=custom_prompt, k=20)
     return chain
