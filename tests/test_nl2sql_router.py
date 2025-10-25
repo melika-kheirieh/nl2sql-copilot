@@ -9,7 +9,9 @@ client = TestClient(app)
 def fake_trace(stage: str):
     return StageTrace(stage=stage, duration_ms=10.0)
 
+
 path = app.url_path_for("nl2sql_handler")
+
 
 # --- 1) Clarify / ambiguity case ---------------------------------------------
 def test_ambiguity_route(monkeypatch):
@@ -47,7 +49,9 @@ def test_error_route(monkeypatch):
     from app.routers import nl2sql
 
     def fake_run(*args, **kwargs):
-        return StageResult(ok=False, error=["Bad SQL"], data={"traces": [fake_trace("safety")]})
+        return StageResult(
+            ok=False, error=["Bad SQL"], data={"traces": [fake_trace("safety")]}
+        )
 
     monkeypatch.setattr(nl2sql._pipeline, "run", fake_run)
 

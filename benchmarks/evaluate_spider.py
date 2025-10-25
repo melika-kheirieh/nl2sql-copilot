@@ -13,15 +13,18 @@ from sqlglot.errors import ParseError
 LOG_DIR = Path("logs/spider_eval")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+
 def normalize_sql(sql: str) -> str:
     # نسخه ساده؛ می‌تونی قوی‌ترش کنی با پارس + بازسازی
     return " ".join(sql.lower().strip().split())
+
 
 def compare_results(pred_rows, gold_rows):
     if pred_rows is None or gold_rows is None:
         return False
     # اگر ترتیب مهم نیست
     return set(pred_rows) == set(gold_rows)
+
 
 def try_execute_sql(sql_db, sql, timeout: float = None):
     start = time.time()
@@ -30,6 +33,7 @@ def try_execute_sql(sql_db, sql, timeout: float = None):
         return rows, time.time() - start, None
     except Exception as e:
         return None, time.time() - start, str(e)
+
 
 def exact_match_structural(sql_pred: str, sql_gold: str) -> bool:
     try:
@@ -54,12 +58,18 @@ def exact_match_structural(sql_pred: str, sql_gold: str) -> bool:
     norm_gold = normalize_ast(ast_gold)
     return norm_prd == norm_gold
 
+
 def get_git_commit_hash() -> str:
     try:
-        out = subprocess.check_output(["git", "rev-parse", "HEAD"]).strip().decode("ascii")
+        out = (
+            subprocess.check_output(["git", "rev-parse", "HEAD"])
+            .strip()
+            .decode("ascii")
+        )
         return out
     except Exception:
         return "UNKNOWN"
+
 
 FORBIDDEN_NODES = (
     exp.Insert,
@@ -71,6 +81,7 @@ FORBIDDEN_NODES = (
     exp.Pragma,
     exp.Create,
 )
+
 
 def is_safe_sql(sql: str, dialect: str | None = None) -> bool:
     try:
@@ -84,6 +95,7 @@ def is_safe_sql(sql: str, dialect: str | None = None) -> bool:
             return False
     return True
 
+
 def run_eval(split="dev", limit=100, resume=True, sleep_time: float = 0.01):
     data = load_spider_sqlite(split)
     if len(data) < limit:
@@ -94,8 +106,8 @@ def run_eval(split="dev", limit=100, resume=True, sleep_time: float = 0.01):
     commit_hash = get_git_commit_hash()
     start_ts = int(time.time())
 
-    pred_txt   = LOG_DIR / f"{split}_pred_{start_ts}.txt"
-    gold_txt   = LOG_DIR / f"{split}_gold_{start_ts}.txt"
+    pred_txt = LOG_DIR / f"{split}_pred_{start_ts}.txt"
+    gold_txt = LOG_DIR / f"{split}_gold_{start_ts}.txt"
     results_fn = LOG_DIR / f"{split}_results_{start_ts}.jsonl"
     metrics_fn = LOG_DIR / f"{split}_metrics_{start_ts}.json"
 
@@ -112,10 +124,11 @@ def run_eval(split="dev", limit=100, resume=True, sleep_time: float = 0.01):
                     pass
 
     write_header = not results_fn.exists()
-    with results_fn.open("a", encoding="utf-8") as fout, \
-         pred_txt.open("a", encoding="utf-8") as fpred, \
-         gold_txt.open("a", encoding="utf-8") as fgold:
-
+    with (
+        results_fn.open("a", encoding="utf-8") as fout,
+        pred_txt.open("a", encoding="utf-8") as fpred,
+        gold_txt.open("a", encoding="utf-8") as fgold,
+    ):
         if write_header:
             header = {
                 "commit_hash": commit_hash,
@@ -228,21 +241,28 @@ def run_eval(split="dev", limit=100, resume=True, sleep_time: float = 0.01):
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-
-    valid = [r for r in agg if (not r.get("safe_check_failed", False)) and r.get("gold_error") is None]
+    valid = [
+        r
+        for r in agg
+        if (not r.get("safe_check_failed", False)) and r.get("gold_error") is None
+    ]
     total_valid = len(valid)
     total_all = len(agg)
     if total_valid == 0:
         print("No valid examples to compute metrics")
         return
 
-    em_count        = sum(1 for r in valid if r["exact_match"])
+    em_count = sum(1 for r in valid if r["exact_match"])
     em_struct_count = sum(1 for r in valid if r["exact_match_structural"])
-    exec_acc_count  = sum(1 for r in valid if r["execution_accuracy"])
-    error_count     = sum(1 for r in agg if (r.get("error") is not None) and (not r.get("safe_check_failed", False)))
+    exec_acc_count = sum(1 for r in valid if r["execution_accuracy"])
+    error_count = sum(
+        1
+        for r in agg
+        if (r.get("error") is not None) and (not r.get("safe_check_failed", False))
+    )
     safe_fail_count = sum(1 for r in agg if r.get("safe_check_failed", False))
-    avg_gen_time    = sum(r["gen_time"] for r in valid) / total_valid
-    avg_exec_time   = sum(r["exec_time"] for r in valid) / total_valid
+    avg_gen_time = sum(r["gen_time"] for r in valid) / total_valid
+    avg_exec_time = sum(r["exec_time"] for r in valid) / total_valid
 
     metrics = {
         "commit_hash": commit_hash,

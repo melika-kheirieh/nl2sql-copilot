@@ -22,8 +22,8 @@ df = pd.DataFrame(rows)
 st.subheader("Aggregate Metrics")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Queries", len(df))
-col2.metric("Execution Accuracy", f"{df['exec_acc'].mean()*100:.1f}%")
-col3.metric("Safety Violations", f"{df['safe_fail'].mean()*100:.1f}%")
+col2.metric("Execution Accuracy", f"{df['exec_acc'].mean() * 100:.1f}%")
+col3.metric("Safety Violations", f"{df['safe_fail'].mean() * 100:.1f}%")
 col4.metric("Average Latency (ms)", f"{df['latency_ms'].mean():.0f}")
 
 # 3. Latency Distribution
@@ -33,13 +33,23 @@ st.plotly_chart(fig1, use_container_width=True)
 
 # 4. Cost vs Accuracy
 st.subheader("Cost vs Execution Accuracy")
-fig2 = px.scatter(df, x="cost_usd", y="exec_acc", color="provider",
-                  title="Trade-off: Cost vs Accuracy", hover_data=["query"])
+fig2 = px.scatter(
+    df,
+    x="cost_usd",
+    y="exec_acc",
+    color="provider",
+    title="Trade-off: Cost vs Accuracy",
+    hover_data=["query"],
+)
 st.plotly_chart(fig2, use_container_width=True)
 
 # 5. Repair Stats
 if "repair_attempts" in df.columns:
     st.subheader("Repair Attempts")
-    fig3 = px.bar(df.groupby("repair_attempts").size().reset_index(name="count"),
-                  x="repair_attempts", y="count", title="Number of Repair Attempts per Query")
+    fig3 = px.bar(
+        df.groupby("repair_attempts").size().reset_index(name="count"),
+        x="repair_attempts",
+        y="count",
+        title="Number of Repair Attempts per Query",
+    )
     st.plotly_chart(fig3, use_container_width=True)

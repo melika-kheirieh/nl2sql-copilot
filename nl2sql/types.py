@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, List
 
+
 @dataclass(frozen=True)
 class StageTrace:
     stage: str
@@ -9,6 +10,7 @@ class StageTrace:
     token_in: Optional[int] = None
     token_out: Optional[int] = None
     cost_usd: Optional[float] = None
+
 
 @dataclass(frozen=True)
 class StageResult:

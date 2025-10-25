@@ -1,10 +1,12 @@
 from pydantic import BaseModel
 from typing import List, Optional, Any, Dict
 
+
 class NL2SQLRequest(BaseModel):
     query: str
     schema_preview: str
     db_name: Optional[str] = "default"
+
 
 class TraceModel(BaseModel):
     stage: str
@@ -14,15 +16,18 @@ class TraceModel(BaseModel):
     cost_usd: float | None = 0
     notes: Dict[str, Any] | None = None
 
+
 class NL2SQLResponse(BaseModel):
     ambiguous: bool = False
     sql: str
     rationale: Optional[str] = None
     traces: List[TraceModel] = []
 
+
 class ClarifyResponse(BaseModel):
     ambiguous: bool = True
     questions: List[str]
+
 
 class ErrorResponse(BaseModel):
     error: str

@@ -2,6 +2,7 @@ import psycopg
 from typing import Any, List, Tuple
 from adapters.db.base import DBAdapter
 
+
 class PostgresAdapter(DBAdapter):
     name = "postgres"
     dialect = "postgres"
@@ -24,11 +25,14 @@ class PostgresAdapter(DBAdapter):
             tables = [t[0] for t in cur.fetchall()]
             lines = []
             for t in tables:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT column_name, data_type
                     FROM information_schema.columns
                     WHERE table_name = %s;
-                """, (t,))
+                """,
+                    (t,),
+                )
                 cols = [f"{c[0]}:{c[1]}" for c in cur.fetchall()]
                 lines.append(f"- {t} ({', '.join(cols)})")
             return "\n".join(lines)
