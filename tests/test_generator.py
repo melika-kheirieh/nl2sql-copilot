@@ -5,6 +5,7 @@ from nl2sql.types import StageResult
 
 # --- Dummy LLMs (respect the 5-tuple contract) --------------------------------
 
+
 class LLM_OK:
     def generate_sql(self, **kwargs):
         # contract: (sql, rationale, t_in, t_out, cost)
@@ -37,11 +38,12 @@ class LLM_CONTRACT_SHORT:
 
 # --- Parametrized negative cases ----------------------------------------------
 
+
 @pytest.mark.parametrize(
     "llm, err_keyword",
     [
-        (LLM_EMPTY_SQL(), "empty"),          # empty or non-string sql
-        (LLM_NON_SELECT(), "non-select"),    # generated non-SELECT
+        (LLM_EMPTY_SQL(), "empty"),  # empty or non-string sql
+        (LLM_NON_SELECT(), "non-select"),  # generated non-SELECT
         (LLM_CONTRACT_NONE(), "contract violation"),
         (LLM_CONTRACT_SHORT(), "contract violation"),
     ],
@@ -52,7 +54,7 @@ def test_generator_errors_do_not_create_trace(llm, err_keyword):
         user_query="show all singers",
         schema_preview="CREATE TABLE singer(id int, name text);",
         plan_text="-- plan --",
-        clarify_answers={}
+        clarify_answers={},
     )
     assert isinstance(r, StageResult)
     assert r.ok is False
@@ -65,13 +67,14 @@ def test_generator_errors_do_not_create_trace(llm, err_keyword):
 
 # --- Positive case (success) ---------------------------------------------------
 
+
 def test_generator_success_has_valid_trace_and_data():
     gen = Generator(llm=LLM_OK())
     r = gen.run(
         user_query="show all singers",
         schema_preview="CREATE TABLE singer(id int, name text);",
         plan_text="-- plan --",
-        clarify_answers={}
+        clarify_answers={},
     )
 
     # Basic success checks

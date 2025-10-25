@@ -17,14 +17,17 @@ class Pipeline:
     All stages return structured traces and errors but final result is JSON-safe dict.
     """
 
-    def __init__(self, *,
-                 detector: AmbiguityDetector,
-                 planner: Planner,
-                 generator: Generator,
-                 safety: Safety,
-                 executor: Executor,
-                 verifier: Verifier,
-                 repair: Repair):
+    def __init__(
+        self,
+        *,
+        detector: AmbiguityDetector,
+        planner: Planner,
+        generator: Generator,
+        safety: Safety,
+        executor: Executor,
+        verifier: Verifier,
+        repair: Repair,
+    ):
         self.detector = detector
         self.planner = planner
         self.generator = generator
@@ -59,8 +62,13 @@ class Pipeline:
             return StageResult(ok=False, data=None, trace=None, errors=[f"{e}", tb])
 
     # ------------------------------------------------------------
-    def run(self, *, user_query: str, schema_preview: str,
-            clarify_answers: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def run(
+        self,
+        *,
+        user_query: str,
+        schema_preview: str,
+        clarify_answers: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Always returns:
         {
@@ -86,26 +94,45 @@ class Pipeline:
                     "error": False,
                     "details": [f"Ambiguities found: {len(questions)}"],
                     "questions": questions,
-                    "traces": []
+                    "traces": [],
                 }
         except Exception as e:
-            return {"ambiguous": True, "error": True, "details": [f"Detector failed: {e}"], "traces": []}
+            return {
+                "ambiguous": True,
+                "error": True,
+                "details": [f"Detector failed: {e}"],
+                "traces": [],
+            }
 
         # --- 2) planner
-        r_plan = self._safe_stage(self.planner.run, user_query=user_query, schema_preview=schema_preview)
+        r_plan = self._safe_stage(
+            self.planner.run, user_query=user_query, schema_preview=schema_preview
+        )
         traces.extend(self._trace_list(r_plan))
         if not r_plan.ok:
-            return {"ambiguous": False, "error": True, "details": r_plan.errors, "traces": traces}
+            return {
+                "ambiguous": False,
+                "error": True,
+                "details": r_plan.errors,
+                "traces": traces,
+            }
 
         # --- 3) generator
-        r_gen = self._safe_stage(self.generator.run,
-                                 user_query=user_query,
-                                 schema_preview=schema_preview,
-                                 plan_text=r_plan.data.get("plan"),
-                                 clarify_answers=clarify_answers or {})
+        r_gen = self._safe_stage(
+            self.generator.run,
+            user_query=user_query,
+            schema_preview=schema_preview,
+            plan_text=r_plan.data.get("plan"),
+            clarify_answers=clarify_answers or {},
+        )
         traces.extend(self._trace_list(r_gen))
         if not r_gen.ok:
-            return {"ambiguous": False, "error": True, "details": r_gen.errors, "traces": traces}
+            return {
+                "ambiguous": False,
+                "error": True,
+                "details": r_gen.errors,
+                "traces": traces,
+            }
         sql = r_gen.data.get("sql")
         rationale = r_gen.data.get("rationale")
 
@@ -113,7 +140,12 @@ class Pipeline:
         r_safe = self._safe_stage(self.safety.check, sql=sql)
         traces.extend(self._trace_list(r_safe))
         if not r_safe.ok:
-            return {"ambiguous": False, "error": True, "details": r_safe.errors, "traces": traces}
+            return {
+                "ambiguous": False,
+                "error": True,
+                "details": r_safe.errors,
+                "traces": traces,
+            }
 
         # --- 5) executor
         r_exec = self._safe_stage(self.executor.run, sql=r_safe.data["sql"])
@@ -129,10 +161,12 @@ class Pipeline:
         # --- 7) repair loop if verification failed
         if not verified:
             for attempt in range(2):
-                r_fix = self._safe_stage(self.repair.run,
-                                         sql=sql,
-                                         error_msg="; ".join(details or ["unknown"]),
-                                         schema_preview=schema_preview)
+                r_fix = self._safe_stage(
+                    self.repair.run,
+                    sql=sql,
+                    error_msg="; ".join(details or ["unknown"]),
+                    schema_preview=schema_preview,
+                )
                 traces.extend(self._trace_list(r_fix))
                 if not r_fix.ok:
                     break

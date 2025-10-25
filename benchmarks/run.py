@@ -20,6 +20,7 @@ from nl2sql.repair import Repair
 from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.llm.openai_provider import OpenAIProvider
 
+
 # ---- fallbacks: Dummy LLM (so it runs without API keys)
 class DummyLLM:
     provider_id = "dummy-llm"
@@ -28,7 +29,14 @@ class DummyLLM:
         text = f"- understand question: {user_query}\n- identify tables\n- join if needed\n- filter\n- order/limit"
         return text, 0, 0, 0.0
 
-    def generate_sql(self, *, user_query: str, schema_preview: str, plan_text: str, clarify_answers=None):
+    def generate_sql(
+        self,
+        *,
+        user_query: str,
+        schema_preview: str,
+        plan_text: str,
+        clarify_answers=None,
+    ):
         # naive demo SQL (so pipeline flows end-to-end)
         sql = "SELECT 1 AS one;"
         rationale = "Demo SQL from DummyLLM"
@@ -43,12 +51,15 @@ def ensure_demo_db(path: Path) -> None:
     if path.exists():
         return
     import sqlite3
+
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path)
     cur = con.cursor()
     cur.execute("CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, spend REAL);")
-    cur.executemany("INSERT INTO users(id,name,spend) VALUES(?,?,?)",
-                    [(1,"Alice",120.5),(2,"Bob",80.0),(3,"Carol",155.0)])
+    cur.executemany(
+        "INSERT INTO users(id,name,spend) VALUES(?,?,?)",
+        [(1, "Alice", 120.5), (2, "Bob", 80.0), (3, "Carol", 155.0)],
+    )
     con.commit()
     con.close()
 
@@ -86,7 +97,7 @@ def run_benchmark(queries, schema_preview, pipeline: Pipeline, outfile: Path):
     for q in queries:
         t0 = time.perf_counter()
         r = pipeline.run(user_query=q, schema_preview=schema_preview)
-        latency_ms = (time.perf_counter()-t0)*1000
+        latency_ms = (time.perf_counter() - t0) * 1000
         ok = (not r.get("ambiguous")) and ("error" not in r)
 
         traces = r.get("traces", [])
@@ -97,15 +108,19 @@ def run_benchmark(queries, schema_preview, pipeline: Pipeline, outfile: Path):
             except Exception:
                 pass
 
-        results.append({
-            "query": q,
-            "exec_acc": 1.0 if ok else 0.0,
-            "safe_fail": 0.0 if ok else 1.0 if "unsafe" in str(r).lower() else 0.0,
-            "latency_ms": latency_ms,
-            "cost_usd": cost_sum,
-            "repair_attempts": sum(1 for t in traces if t.get("stage") == "repair"),
-            "provider": pipeline.generator.llm.provider_id if hasattr(pipeline.generator, "llm") else "unknown",
-        })
+        results.append(
+            {
+                "query": q,
+                "exec_acc": 1.0 if ok else 0.0,
+                "safe_fail": 0.0 if ok else 1.0 if "unsafe" in str(r).lower() else 0.0,
+                "latency_ms": latency_ms,
+                "cost_usd": cost_sum,
+                "repair_attempts": sum(1 for t in traces if t.get("stage") == "repair"),
+                "provider": pipeline.generator.llm.provider_id
+                if hasattr(pipeline.generator, "llm")
+                else "unknown",
+            }
+        )
 
     outfile.parent.mkdir(parents=True, exist_ok=True)
     with open(outfile, "w") as f:
@@ -118,10 +133,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--outfile", default="benchmarks/results/demo.jsonl")
     parser.add_argument("--db", default="data/bench_demo.db")
-    parser.add_argument("--use-openai", action="store_true", help="Use OpenAI provider if API key present")
+    parser.add_argument(
+        "--use-openai",
+        action="store_true",
+        help="Use OpenAI provider if API key present",
+    )
     args = parser.parse_args()
 
-    ROOT = Path(__file__).resolve().parents[1]   # project root
+    ROOT = Path(__file__).resolve().parents[1]  # project root
     outfile = (ROOT / args.outfile).resolve()
     db_path = (ROOT / args.db).resolve()
 

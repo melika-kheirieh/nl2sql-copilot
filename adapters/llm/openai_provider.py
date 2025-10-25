@@ -11,14 +11,13 @@ from openai import OpenAI
 #  - OPENAI_MODEL_ID  (e.g., "gpt-4o-mini")
 
 
-
 class OpenAIProvider(LLMProvider):
     provider_id = "openai"
 
     def __init__(self) -> None:
         self.client = OpenAI(
             api_key=os.environ["OPENAI_API_KEY"],
-            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         )
         self.model = os.getenv("OPENAI_MODEL_ID", "gpt-4o-mini")
 
@@ -27,16 +26,25 @@ class OpenAIProvider(LLMProvider):
             model=self.model,
             messages=[
                 {"role": "system", "content": "You create SQL query plans."},
-                {"role": "user", "content": f"Query: {user_query}\nSchema:\n{schema_preview}"}
+                {
+                    "role": "user",
+                    "content": f"Query: {user_query}\nSchema:\n{schema_preview}",
+                },
             ],
-            temperature=0
+            temperature=0,
         )
         msg = completion.choices[0].message.content
         usage = completion.usage
-        return msg, usage.prompt_tokens, usage.completion_tokens, self._estimate_cost(usage)
+        return (
+            msg,
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            self._estimate_cost(usage),
+        )
 
-
-    def generate_sql(self, *, user_query, schema_preview, plan_text, clarify_answers=None):
+    def generate_sql(
+        self, *, user_query, schema_preview, plan_text, clarify_answers=None
+    ):
         prompt = f"""
         You are a precise SQL generator. 
         Return ONLY valid JSON with two keys: "sql" and "rationale".
@@ -60,9 +68,9 @@ class OpenAIProvider(LLMProvider):
             model=self.model,
             messages=[
                 {"role": "system", "content": "You convert natural language to SQL."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
-            temperature=0
+            temperature=0,
         )
         content = completion.choices[0].message.content.strip()
         usage = completion.usage  # ← لازم داریم
@@ -78,7 +86,7 @@ class OpenAIProvider(LLMProvider):
             end = content.rfind("}")
             if start != -1 and end != -1:
                 try:
-                    parsed = json.loads(content[start:end + 1])
+                    parsed = json.loads(content[start : end + 1])
                 except Exception:
                     raise ValueError(f"Invalid LLM JSON output: {content[:200]}")
             else:
@@ -93,19 +101,29 @@ class OpenAIProvider(LLMProvider):
         # IMPORTANT: return the expected 5-tuple
         return sql, rationale, t_in, t_out, cost
 
-
     def repair(self, *, sql, error_msg, schema_preview):
         completion = self.client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": "You fix SQL queries keeping them SELECT-only."},
-                {"role": "user", "content": f"SQL:\n{sql}\nError:\n{error_msg}\nSchema:\n{schema_preview}"}
+                {
+                    "role": "system",
+                    "content": "You fix SQL queries keeping them SELECT-only.",
+                },
+                {
+                    "role": "user",
+                    "content": f"SQL:\n{sql}\nError:\n{error_msg}\nSchema:\n{schema_preview}",
+                },
             ],
-            temperature=0
+            temperature=0,
         )
         msg = completion.choices[0].message.content
         usage = completion.usage
-        return msg, usage.prompt_tokens, usage.completion_tokens, self._estimate_cost(usage)
+        return (
+            msg,
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            self._estimate_cost(usage),
+        )
 
     def _estimate_cost(self, usage):
         # Rough estimation example — can be refined with official token pricing

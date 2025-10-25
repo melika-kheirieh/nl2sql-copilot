@@ -2,6 +2,7 @@ import sqlite3
 from typing import List, Tuple, Any
 from adapters.db.base import DBAdapter
 
+
 class SQLiteAdapter(DBAdapter):
     name = "sqlite"
     dialect = "sqlite"

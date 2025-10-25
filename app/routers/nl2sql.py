@@ -19,7 +19,6 @@ import os
 router = APIRouter(prefix="/nl2sql")
 
 
-
 if os.getenv("DB_MODE", "sqlite") == "postgres":
     _db = PostgresAdapter(os.environ["POSTGRES_DSN"])
 else:
@@ -40,13 +39,14 @@ _pipeline = Pipeline(
     safety=Safety(),
     executor=_executor,
     verifier=_verifier,
-    repair=_repair
+    repair=_repair,
 )
 
 
 def _to_dict(obj):
     """Helper: safely convert dataclass → dict."""
     return asdict(obj) if is_dataclass(obj) else obj
+
 
 def _round_trace(t: dict) -> dict:
     if t.get("cost_usd") is not None:
@@ -55,9 +55,12 @@ def _round_trace(t: dict) -> dict:
         t["duration_ms"] = round(t["duration_ms"], 2)
     return t
 
+
 @router.post("", name="nl2sql_handler")
 def nl2sql_handler(request: NL2SQLRequest):
-    result = _pipeline.run(user_query=request.query, schema_preview=request.schema_preview)
+    result = _pipeline.run(
+        user_query=request.query, schema_preview=request.schema_preview
+    )
 
     # --- Ensure result type ---
     if not isinstance(result, StageResult):

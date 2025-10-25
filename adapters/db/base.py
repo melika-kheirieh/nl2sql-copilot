@@ -1,8 +1,10 @@
 from typing import Tuple, List, Dict, Any, Protocol
 from typing import List, Tuple, Any
 
+
 class DBAdapter(Protocol):
     """Abstract database adapter for read-only queries."""
+
     name: str
     dialect: str
 

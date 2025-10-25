@@ -14,16 +14,26 @@ When repairing:
 Return only the corrected SQL.
 """
 
+
 class Repair:
     name = "repair"
+
     def __init__(self, llm: LLMProvider):
         self.llm = llm
 
-    def run(self, sql:str, error_msg: str, schema_preview: str) -> StageResult:
+    def run(self, sql: str, error_msg: str, schema_preview: str) -> StageResult:
         t0 = time.perf_counter()
-        fixed_sql, t_in, t_out, cost = self.llm.repair(sql=sql, error_msg=f"{GUIDELINES}\n\n{error_msg}",
-                                                      schema_preview=schema_preview)
-        trace = StageTrace(stage=self.name, duration_ms=(time.perf_counter()-t0)*1000,
-                           token_in=t_in, token_out=t_out, cost_usd=cost,
-                           notes={"old_sql_len": len(sql), "new_sql_len": len(fixed_sql)})
+        fixed_sql, t_in, t_out, cost = self.llm.repair(
+            sql=sql,
+            error_msg=f"{GUIDELINES}\n\n{error_msg}",
+            schema_preview=schema_preview,
+        )
+        trace = StageTrace(
+            stage=self.name,
+            duration_ms=(time.perf_counter() - t0) * 1000,
+            token_in=t_in,
+            token_out=t_out,
+            cost_usd=cost,
+            notes={"old_sql_len": len(sql), "new_sql_len": len(fixed_sql)},
+        )
         return StageResult(ok=True, data={"sql": fixed_sql}, trace=trace)
