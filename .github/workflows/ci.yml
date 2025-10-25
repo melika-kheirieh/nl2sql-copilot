@@ -8,7 +8,8 @@ on:
 jobs:
   build-test:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
     env:
       PIP_NO_CACHE_DIR: 1
 
@@ -38,22 +39,37 @@ jobs:
   docker-build:
     needs: build-test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: ${{ github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
+      packages: write   # ← برای ghcr لازم است
+
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: nl2sql-copilot
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Login to GHCR
-        if: secrets.GHCR_TOKEN != ''
-        run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Login to GHCR (via GITHUB_TOKEN)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Docker image
+      - name: Build image
         run: |
-          IMAGE=ghcr.io/${{ github.repository_owner }}/nl2sql-copilot:${{ github.sha }}
-          docker build -t $IMAGE .
+          IMAGE=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker build -t "$IMAGE" .
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
       - name: Push image
-        if: secrets.GHCR_TOKEN != ''
-        run: docker push $IMAGE
+        run: docker push "$IMAGE"
+
+      - name: Tag 'latest' and push
+        run: |
+          LATEST=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+          docker tag "$IMAGE" "$LATEST"
+          docker push "$LATEST"
