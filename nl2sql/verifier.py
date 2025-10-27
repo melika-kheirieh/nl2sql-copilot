@@ -14,7 +14,7 @@ class Verifier:
                 trace=StageTrace(
                     stage=self.name, duration_ms=0, notes={"reason": "execution_error"}
                 ),
-                error=exec_result.errors,
+                error=exec_result.error,
             )
 
         # Rule 1: check SELECT / GROUP consistency
