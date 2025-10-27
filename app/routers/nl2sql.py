@@ -76,7 +76,7 @@ def nl2sql_handler(request: NL2SQLRequest):
         raise HTTPException(status_code=400, detail=detail)
 
     # --- Success case ---
-    traces = [ _round_trace(t) for t in (result.traces or []) ]
+    traces = [_round_trace(t) for t in (result.traces or [])]
     return NL2SQLResponse(
         ambiguous=False,
         sql=result.sql,

@@ -211,13 +211,17 @@ class Pipeline:
                     details.extend(r_safe.error or [])
                     continue
 
-                r_exec = self._safe_stage(self.executor.run, sql=r_safe.data.get("sql", sql))
+                r_exec = self._safe_stage(
+                    self.executor.run, sql=r_safe.data.get("sql", sql)
+                )
                 traces.extend(self._trace_list(r_exec))
                 if not r_exec.ok:
                     details.extend(r_exec.error or [])
                     continue
 
-                r_ver = self._safe_stage(self.verifier.run, sql=sql, exec_result=r_exec.data)
+                r_ver = self._safe_stage(
+                    self.verifier.run, sql=sql, exec_result=r_exec.data
+                )
                 traces.extend(self._trace_list(r_ver))
                 verified = bool(r_ver.ok)
                 if verified:

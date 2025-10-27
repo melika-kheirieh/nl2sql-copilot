@@ -4,6 +4,7 @@ from nl2sql.types import StageResult, StageTrace
 
 # --- Dummy stages to isolate pipeline -----------------------------------------
 
+
 class DummyDetector:
     """Simulates ambiguity detector stage."""
 
