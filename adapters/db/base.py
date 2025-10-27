@@ -1,5 +1,4 @@
-from typing import Tuple, List, Dict, Any, Protocol
-from typing import List, Tuple, Any
+from typing import Tuple, List, Any, Protocol
 
 
 class DBAdapter(Protocol):

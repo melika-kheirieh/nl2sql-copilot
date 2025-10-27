@@ -26,7 +26,7 @@ class PostgresAdapter(DBAdapter):
             lines = []
             for t in tables:
                 cur.execute(
-                    f"""
+                    """
                     SELECT column_name, data_type
                     FROM information_schema.columns
                     WHERE table_name = %s;

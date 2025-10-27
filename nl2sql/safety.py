@@ -1,5 +1,6 @@
 from __future__ import annotations
-import re, time
+import re
+import time
 from nl2sql.types import StageResult, StageTrace
 
 # --- Regex utils ---
