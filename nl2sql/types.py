@@ -19,3 +19,20 @@ class StageResult:
     trace: Optional[StageTrace] = None
     error: Optional[List[str]] = None
     notes: Optional[Dict[str, Any]] = None
+
+
+@dataclass(frozen=True)
+class FinalResult:
+    """
+    Final domain result of the whole pipeline.
+    Adapters (HTTP/CLI/UI) should serialize this to dict/JSON at the boundary.
+    """
+    ok: bool                   # end-to-end success
+    ambiguous: bool
+    error: bool
+    sql: Optional[str]
+    rationale: Optional[str]
+    verified: Optional[bool]
+    details: Optional[List[str]]
+    questions: Optional[List[str]]
+    traces: List[Dict[str, Any]]

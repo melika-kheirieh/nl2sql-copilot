@@ -1,14 +1,13 @@
-from nl2sql.pipeline import Pipeline
+from nl2sql.pipeline import Pipeline, FinalResult
 from nl2sql.types import StageResult, StageTrace
 
 
 # --- Dummy stages to isolate pipeline -----------------------------------------
 
-
 class DummyDetector:
     """Simulates ambiguity detector stage."""
 
-    def __init__(self, ambiguous=False):
+    def __init__(self, ambiguous: bool = False):
         self.ambiguous = ambiguous
 
     def detect(self, user_query, schema_preview):
@@ -43,10 +42,12 @@ class DummyGenerator:
 class DummySafety:
     """Simulates safety stage."""
 
-    def check(self, sql):
+    # NOTE: pipeline now calls safety.run(sql=...)
+    def run(self, *, sql):
         trace = StageTrace(stage="safety", duration_ms=1.0)
         if "DROP" in sql.upper():
             return StageResult(ok=False, error=["Unsafe SQL"], trace=trace)
+        # echo back sql in data to feed executor
         return StageResult(ok=True, data={"sql": sql, "rationale": "safe"}, trace=trace)
 
 
@@ -64,13 +65,13 @@ def test_pipeline_success():
         schema_preview="CREATE TABLE singer(id int, name text);",
     )
 
-    assert isinstance(r, StageResult)
+    assert isinstance(r, FinalResult)
     assert r.ok is True
-    data = r.data or {}
-    assert data["sql"].lower().startswith("select")
-    assert any(t.stage == "planner" for t in data["traces"])
-    assert any(t.stage == "generator" for t in data["traces"])
-    assert any(t.stage == "safety" for t in data["traces"])
+    assert r.sql is not None and r.sql.lower().startswith("select")
+    # traces is a list of dicts (StageTrace.__dict__)
+    assert any(t.get("stage") == "planner" for t in r.traces)
+    assert any(t.get("stage") == "generator" for t in r.traces)
+    assert any(t.get("stage") == "safety" for t in r.traces)
 
 
 # --- 2) Ambiguity case --------------------------------------------------------
@@ -84,10 +85,10 @@ def test_pipeline_ambiguity():
 
     r = pipeline.run(user_query="show data", schema_preview="CREATE TABLE x(id int);")
 
-    assert isinstance(r, StageResult)
+    assert isinstance(r, FinalResult)
     assert r.ok is True
-    assert r.data["ambiguous"] is True
-    assert isinstance(r.data["questions"], list)
+    assert r.ambiguous is True
+    assert isinstance(r.questions, list) and len(r.questions) > 0
 
 
 # --- 3) Planner failure -------------------------------------------------------
@@ -101,9 +102,10 @@ def test_pipeline_plan_fail():
     r = pipeline.run(
         user_query="fail_plan", schema_preview="CREATE TABLE singer(id int);"
     )
-    assert isinstance(r, StageResult)
+    assert isinstance(r, FinalResult)
     assert r.ok is False
-    assert "Planner failed" in " ".join(r.error or [])
+    assert r.details is not None
+    assert "Planner failed" in " ".join(r.details)
 
 
 # --- 4) Generator failure -----------------------------------------------------
@@ -117,8 +119,10 @@ def test_pipeline_gen_fail():
     r = pipeline.run(
         user_query="fail_gen", schema_preview="CREATE TABLE singer(id int);"
     )
+    assert isinstance(r, FinalResult)
     assert r.ok is False
-    assert "Generator failed" in " ".join(r.error or [])
+    assert r.details is not None
+    assert "Generator failed" in " ".join(r.details)
 
 
 # --- 5) Safety failure --------------------------------------------------------
@@ -140,5 +144,7 @@ def test_pipeline_safety_fail():
     r = pipeline.run(
         user_query="drop something", schema_preview="CREATE TABLE x(id int);"
     )
+    assert isinstance(r, FinalResult)
     assert r.ok is False
-    assert "unsafe" in " ".join(r.error or []).lower()
+    assert r.details is not None
+    assert "unsafe" in " ".join(r.details).lower()
