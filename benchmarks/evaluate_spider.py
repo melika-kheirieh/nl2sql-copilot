@@ -1,5 +1,7 @@
 from __future__ import annotations
-import time, json, subprocess
+import time
+import json
+import subprocess
 from pathlib import Path
 from tqdm import tqdm
 

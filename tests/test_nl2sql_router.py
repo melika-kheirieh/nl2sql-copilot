@@ -1,4 +1,3 @@
-import pytest
 from fastapi.testclient import TestClient
 from app.main import app
 from nl2sql.types import StageResult, StageTrace

@@ -1,4 +1,3 @@
-import pytest
 from nl2sql.pipeline import Pipeline
 from nl2sql.types import StageResult, StageTrace
 

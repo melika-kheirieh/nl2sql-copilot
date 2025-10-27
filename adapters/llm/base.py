@@ -1,6 +1,6 @@
 # adapters/llm/base.py
 from __future__ import annotations
-from typing import Tuple, List, Dict, Any, Protocol
+from typing import Tuple, Dict, Any, Protocol
 
 
 class LLMProvider(Protocol):
