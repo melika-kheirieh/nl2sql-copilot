@@ -15,7 +15,7 @@ if not result_files:
     st.stop()
 
 file = st.selectbox("Select benchmark file", result_files)
-rows = [json.loads(l) for l in open(file)]
+rows = [json.loads(line) for line in open(file)]
 df = pd.DataFrame(rows)
 
 # 2. Summary metrics

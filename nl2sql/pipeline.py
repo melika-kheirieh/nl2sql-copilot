@@ -1,6 +1,6 @@
 from __future__ import annotations
 import traceback
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
 
 from nl2sql.types import StageResult
