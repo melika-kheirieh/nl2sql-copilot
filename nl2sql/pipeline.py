@@ -9,7 +9,7 @@ from nl2sql.safety import Safety
 from nl2sql.executor import Executor
 from nl2sql.verifier import Verifier
 from nl2sql.repair import Repair
-
+from nl2sql.stubs import NoOpExecutor, NoOpRepair, NoOpVerifier
 
 class Pipeline:
     """
@@ -24,17 +24,17 @@ class Pipeline:
         planner: Planner,
         generator: Generator,
         safety: Safety,
-        executor: Executor,
-        verifier: Verifier,
-        repair: Repair,
+        executor: Optional[Executor] = None,
+        verifier: Optional[Verifier] = None ,
+        repair: Optional[Repair] = None,
     ):
         self.detector = detector
         self.planner = planner
         self.generator = generator
         self.safety = safety
-        self.executor = executor
-        self.verifier = verifier
-        self.repair = repair
+        self.executor = executor or NoOpExecutor()
+        self.verifier = verifier or NoOpVerifier()
+        self.repair = repair or NoOpRepair()
 
     # ------------------------------------------------------------
     def _trace_list(self, *stages: StageResult) -> List[dict]:
@@ -59,7 +59,7 @@ class Pipeline:
                 return StageResult(ok=True, data=r, trace=None)
         except Exception as e:
             tb = traceback.format_exc()
-            return StageResult(ok=False, data=None, trace=None, errors=[f"{e}", tb])
+            return StageResult(ok=False, data=None, trace=None, error=[f"{e}", tb])
 
     # ------------------------------------------------------------
     def run(
@@ -113,7 +113,7 @@ class Pipeline:
             return {
                 "ambiguous": False,
                 "error": True,
-                "details": r_plan.errors,
+                "details": r_plan.error,
                 "traces": traces,
             }
 
@@ -143,7 +143,7 @@ class Pipeline:
             return {
                 "ambiguous": False,
                 "error": True,
-                "details": r_safe.errors,
+                "details": r_safe.error,
                 "traces": traces,
             }
 
@@ -151,7 +151,7 @@ class Pipeline:
         r_exec = self._safe_stage(self.executor.run, sql=r_safe.data["sql"])
         traces.extend(self._trace_list(r_exec))
         if not r_exec.ok:
-            details.extend(r_exec.errors or [])
+            details.extend(r_exec.error or [])
 
         # --- 6) verifier
         r_ver = self._safe_stage(self.verifier.run, sql=sql, exec_result=r_exec)
@@ -174,12 +174,12 @@ class Pipeline:
                 r_safe = self._safe_stage(self.safety.check, sql=sql)
                 traces.extend(self._trace_list(r_safe))
                 if not r_safe.ok:
-                    details.extend(r_safe.errors or [])
+                    details.extend(r_safe.error or [])
                     continue
                 r_exec = self._safe_stage(self.executor.run, sql=r_safe.data["sql"])
                 traces.extend(self._trace_list(r_exec))
                 if not r_exec.ok:
-                    details.extend(r_exec.errors or [])
+                    details.extend(r_exec.error or [])
                     continue
                 r_ver = self._safe_stage(self.verifier.run, sql=sql, exec_result=r_exec)
                 traces.extend(self._trace_list(r_ver))

@@ -1,9 +1,9 @@
 from dotenv import load_dotenv
+from fastapi import FastAPI
+from app.routers import nl2sql
 
 load_dotenv()
 
-from fastapi import FastAPI
-from app.routers import nl2sql
 
 app = FastAPI(
     title="NL2SQL Copilot Prototype",
