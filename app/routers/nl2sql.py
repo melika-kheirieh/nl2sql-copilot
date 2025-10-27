@@ -1,13 +1,12 @@
 from dataclasses import asdict, is_dataclass
 from fastapi import APIRouter, HTTPException
 from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
-from nl2sql.pipeline import Pipeline
+from nl2sql.pipeline import Pipeline, FinalResult
 from nl2sql.ambiguity_detector import AmbiguityDetector
 from nl2sql.safety import Safety
 from nl2sql.planner import Planner
 from nl2sql.generator import Generator
 from adapters.llm.openai_provider import OpenAIProvider
-from nl2sql.types import StageResult
 from nl2sql.executor import Executor
 from nl2sql.verifier import Verifier
 from nl2sql.repair import Repair
@@ -59,28 +58,28 @@ def _round_trace(t: dict) -> dict:
 @router.post("", name="nl2sql_handler")
 def nl2sql_handler(request: NL2SQLRequest):
     result = _pipeline.run(
-        user_query=request.query, schema_preview=request.schema_preview
+        user_query=request.query,
+        schema_preview=request.schema_preview,
     )
 
     # --- Ensure result type ---
-    if not isinstance(result, StageResult):
+    if not isinstance(result, FinalResult):
         raise HTTPException(status_code=500, detail="Pipeline returned unexpected type")
 
-    data = result.data or {}
-
     # --- Handle ambiguity ---
-    if isinstance(data, dict) and data.get("ambiguous") and data.get("questions"):
-        return ClarifyResponse(ambiguous=True, questions=data["questions"])
+    if result.ambiguous and result.questions:
+        return ClarifyResponse(ambiguous=True, questions=result.questions)
 
     # --- Handle error ---
-    if not result.ok:
-        detail = "; ".join(result.error) if result.error else "Unknown error"
+    if not result.ok or result.error:
+        detail = "; ".join(result.details or ["Unknown error"])
         raise HTTPException(status_code=400, detail=detail)
 
     # --- Success case ---
+    traces = [ _round_trace(t) for t in (result.traces or []) ]
     return NL2SQLResponse(
         ambiguous=False,
-        sql=data.get("sql"),
-        rationale=data.get("rationale"),
-        traces=[_to_dict(t) for t in data.get("traces", [])],
+        sql=result.sql,
+        rationale=result.rationale,
+        traces=traces,
     )

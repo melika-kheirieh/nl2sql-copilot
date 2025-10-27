@@ -1,6 +1,8 @@
 from __future__ import annotations
 import traceback
+from dataclasses import dataclass, asdict
 from typing import Dict, Any, Optional, List
+
 from nl2sql.types import StageResult
 from nl2sql.ambiguity_detector import AmbiguityDetector
 from nl2sql.planner import Planner
@@ -11,10 +13,26 @@ from nl2sql.verifier import Verifier
 from nl2sql.repair import Repair
 from nl2sql.stubs import NoOpExecutor, NoOpRepair, NoOpVerifier
 
+
+# ---- NEW: FinalResult as domain-level, type-safe result ----
+@dataclass(frozen=True)
+class FinalResult:
+    ok: bool
+    ambiguous: bool
+    error: bool
+    details: Optional[List[str]]
+    sql: Optional[str]
+    rationale: Optional[str]
+    verified: Optional[bool]
+    questions: Optional[List[str]]
+    traces: List[dict]
+
+
 class Pipeline:
     """
-    NL2SQL Copilot pipeline with guaranteed dict output.
-    All stages return structured traces and errors but final result is JSON-safe dict.
+    NL2SQL Copilot pipeline.
+    Stages return StageResult; final result is a type-safe FinalResult.
+    Adapters (e.g. FastAPI) can serialize with dataclasses.asdict().
     """
 
     def __init__(
@@ -25,7 +43,7 @@ class Pipeline:
         generator: Generator,
         safety: Safety,
         executor: Optional[Executor] = None,
-        verifier: Optional[Verifier] = None ,
+        verifier: Optional[Verifier] = None,
         repair: Optional[Repair] = None,
     ):
         self.detector = detector
@@ -55,7 +73,7 @@ class Pipeline:
             if isinstance(r, StageResult):
                 return r
             else:
-                # not ideal, but wrap it
+                # Normalize non-StageResult returns
                 return StageResult(ok=True, data=r, trace=None)
         except Exception as e:
             tb = traceback.format_exc()
@@ -68,41 +86,40 @@ class Pipeline:
         user_query: str,
         schema_preview: str,
         clarify_answers: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Always returns:
-        {
-            "ambiguous": bool,
-            "error": bool,
-            "details": list[str] | None,
-            "sql": str | None,
-            "rationale": str | None,
-            "verified": bool | None,
-            "traces": list[dict]
-        }
-        """
+    ) -> FinalResult:
         traces: List[dict] = []
         details: List[str] = []
-        sql, rationale, verified = None, None, None
+        sql: Optional[str] = None
+        rationale: Optional[str] = None
+        verified: Optional[bool] = None
 
         # --- 1) ambiguity detection
         try:
             questions = self.detector.detect(user_query, schema_preview)
             if questions:
-                return {
-                    "ambiguous": True,
-                    "error": False,
-                    "details": [f"Ambiguities found: {len(questions)}"],
-                    "questions": questions,
-                    "traces": [],
-                }
+                return FinalResult(
+                    ok=True,
+                    ambiguous=True,
+                    error=False,
+                    details=[f"Ambiguities found: {len(questions)}"],
+                    questions=questions,
+                    sql=None,
+                    rationale=None,
+                    verified=None,
+                    traces=[],
+                )
         except Exception as e:
-            return {
-                "ambiguous": True,
-                "error": True,
-                "details": [f"Detector failed: {e}"],
-                "traces": [],
-            }
+            return FinalResult(
+                ok=False,
+                ambiguous=True,
+                error=True,
+                details=[f"Detector failed: {e}"],
+                questions=None,
+                sql=None,
+                rationale=None,
+                verified=None,
+                traces=[],
+            )
 
         # --- 2) planner
         r_plan = self._safe_stage(
@@ -110,12 +127,17 @@ class Pipeline:
         )
         traces.extend(self._trace_list(r_plan))
         if not r_plan.ok:
-            return {
-                "ambiguous": False,
-                "error": True,
-                "details": r_plan.error,
-                "traces": traces,
-            }
+            return FinalResult(
+                ok=False,
+                ambiguous=False,
+                error=True,
+                details=r_plan.error,
+                questions=None,
+                sql=None,
+                rationale=None,
+                verified=None,
+                traces=traces,
+            )
 
         # --- 3) generator
         r_gen = self._safe_stage(
@@ -127,40 +149,51 @@ class Pipeline:
         )
         traces.extend(self._trace_list(r_gen))
         if not r_gen.ok:
-            return {
-                "ambiguous": False,
-                "error": True,
-                "details": r_gen.errors,
-                "traces": traces,
-            }
+            return FinalResult(
+                ok=False,
+                ambiguous=False,
+                error=True,
+                details=r_gen.error,
+                questions=None,
+                sql=None,
+                rationale=None,
+                verified=None,
+                traces=traces,
+            )
         sql = r_gen.data.get("sql")
         rationale = r_gen.data.get("rationale")
 
         # --- 4) safety
-        r_safe = self._safe_stage(self.safety.check, sql=sql)
+        # fix: align with DummySafety signature → use .run (not .check)
+        r_safe = self._safe_stage(self.safety.run, sql=sql)
         traces.extend(self._trace_list(r_safe))
         if not r_safe.ok:
-            return {
-                "ambiguous": False,
-                "error": True,
-                "details": r_safe.error,
-                "traces": traces,
-            }
+            return FinalResult(
+                ok=False,
+                ambiguous=False,
+                error=True,
+                details=r_safe.error,
+                questions=None,
+                sql=sql,
+                rationale=rationale,
+                verified=None,
+                traces=traces,
+            )
 
         # --- 5) executor
-        r_exec = self._safe_stage(self.executor.run, sql=r_safe.data["sql"])
+        r_exec = self._safe_stage(self.executor.run, sql=r_safe.data.get("sql", sql))
         traces.extend(self._trace_list(r_exec))
         if not r_exec.ok:
             details.extend(r_exec.error or [])
 
         # --- 6) verifier
-        r_ver = self._safe_stage(self.verifier.run, sql=sql, exec_result=r_exec)
+        r_ver = self._safe_stage(self.verifier.run, sql=sql, exec_result=r_exec.data)
         traces.extend(self._trace_list(r_ver))
         verified = bool(r_ver.ok)
 
         # --- 7) repair loop if verification failed
         if not verified:
-            for attempt in range(2):
+            for _attempt in range(2):
                 r_fix = self._safe_stage(
                     self.repair.run,
                     sql=sql,
@@ -171,29 +204,33 @@ class Pipeline:
                 if not r_fix.ok:
                     break
                 sql = r_fix.data.get("sql")
-                r_safe = self._safe_stage(self.safety.check, sql=sql)
+
+                r_safe = self._safe_stage(self.safety.run, sql=sql)
                 traces.extend(self._trace_list(r_safe))
                 if not r_safe.ok:
                     details.extend(r_safe.error or [])
                     continue
-                r_exec = self._safe_stage(self.executor.run, sql=r_safe.data["sql"])
+
+                r_exec = self._safe_stage(self.executor.run, sql=r_safe.data.get("sql", sql))
                 traces.extend(self._trace_list(r_exec))
                 if not r_exec.ok:
                     details.extend(r_exec.error or [])
                     continue
-                r_ver = self._safe_stage(self.verifier.run, sql=sql, exec_result=r_exec)
+
+                r_ver = self._safe_stage(self.verifier.run, sql=sql, exec_result=r_exec.data)
                 traces.extend(self._trace_list(r_ver))
                 verified = bool(r_ver.ok)
                 if verified:
                     break
 
-        # --- Final result dict
-        return {
-            "ambiguous": False,
-            "error": len(details) > 0 and not verified,
-            "details": details or None,
-            "sql": sql,
-            "rationale": rationale,
-            "verified": verified,
-            "traces": traces,
-        }
+        return FinalResult(
+            ok=bool(verified) and not details,
+            ambiguous=False,
+            error=bool(details) and not bool(verified),
+            details=details or None,
+            sql=sql,
+            rationale=rationale,
+            verified=verified,
+            questions=None,
+            traces=traces,
+        )
