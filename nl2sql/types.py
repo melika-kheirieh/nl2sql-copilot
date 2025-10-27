@@ -27,7 +27,8 @@ class FinalResult:
     Final domain result of the whole pipeline.
     Adapters (HTTP/CLI/UI) should serialize this to dict/JSON at the boundary.
     """
-    ok: bool                   # end-to-end success
+
+    ok: bool  # end-to-end success
     ambiguous: bool
     error: bool
     sql: Optional[str]

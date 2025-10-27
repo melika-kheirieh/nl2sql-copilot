@@ -4,9 +4,11 @@ from nl2sql.pipeline import FinalResult
 
 client = TestClient(app)
 
+
 def fake_trace(stage: str) -> dict:
     # FinalResult.traces is a list of dicts (StageTrace.__dict__)
     return {"stage": stage, "duration_ms": 10.0, "cost_usd": None, "notes": None}
+
 
 path = app.url_path_for("nl2sql_handler")
 
