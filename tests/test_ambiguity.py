@@ -1,6 +1,5 @@
 from nl2sql.ambiguity_detector import AmbiguityDetector
 from nl2sql.types import StageResult
-from app.routers import nl2sql
 
 
 def test_detects_ambiguous_terms():
@@ -17,6 +16,8 @@ def test_not_false_positive():
 
 
 def test_ambiguity_response():
+    from app.routers import nl2sql
+
     fake_result = StageResult(
         ok=True, data={"ambiguous": True, "questions": ["Clarify column?"]}
     )

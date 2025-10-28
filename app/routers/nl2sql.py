@@ -25,18 +25,21 @@ if os.getenv("DB_MODE", "sqlite") == "postgres":
 else:
     _db = SQLiteAdapter("data/chinook.db")
 
-# --- Composition Root ---
-_llm = OpenAIProvider()
+
+def get_llm():
+    return OpenAIProvider()
+
+
 # _db = SQLiteAdapter("data/chinook.db")
 _executor = Executor(_db)
 _verifier = Verifier()
-_repair = Repair(_llm)
+_repair = Repair(get_llm())
 
 
 _pipeline = Pipeline(
     detector=AmbiguityDetector(),
-    planner=Planner(_llm),
-    generator=Generator(_llm),
+    planner=Planner(get_llm()),
+    generator=Generator(get_llm()),
     safety=Safety(),
     executor=_executor,
     verifier=_verifier,
