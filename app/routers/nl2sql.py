@@ -13,11 +13,13 @@ from nl2sql.repair import Repair
 from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.db.postgres_adapter import PostgresAdapter
 import os
+from typing import Union
 
 
 router = APIRouter(prefix="/nl2sql")
 
 
+_db: Union[PostgresAdapter, SQLiteAdapter]
 if os.getenv("DB_MODE", "sqlite") == "postgres":
     _db = PostgresAdapter(os.environ["POSTGRES_DSN"])
 else:
