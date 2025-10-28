@@ -14,7 +14,6 @@ from nl2sql.repair import Repair
 from nl2sql.stubs import NoOpExecutor, NoOpRepair, NoOpVerifier
 
 
-# ---- NEW: FinalResult as domain-level, type-safe result ----
 @dataclass(frozen=True)
 class FinalResult:
     ok: bool
@@ -144,7 +143,7 @@ class Pipeline:
             self.generator.run,
             user_query=user_query,
             schema_preview=schema_preview,
-            plan_text=r_plan.data.get("plan"),
+            plan_text=(r_plan.data or {}).get("plan"),
             clarify_answers=clarify_answers or {},
         )
         traces.extend(self._trace_list(r_gen))
@@ -160,11 +159,10 @@ class Pipeline:
                 verified=None,
                 traces=traces,
             )
-        sql = r_gen.data.get("sql")
-        rationale = r_gen.data.get("rationale")
+        sql = (r_gen.data or {}).get("sql")
+        rationale = (r_gen.data or {}).get("rationale")
 
         # --- 4) safety
-        # fix: align with DummySafety signature → use .run (not .check)
         r_safe = self._safe_stage(self.safety.run, sql=sql)
         traces.extend(self._trace_list(r_safe))
         if not r_safe.ok:
@@ -181,13 +179,17 @@ class Pipeline:
             )
 
         # --- 5) executor
-        r_exec = self._safe_stage(self.executor.run, sql=r_safe.data.get("sql", sql))
+        r_exec = self._safe_stage(
+            self.executor.run, sql=(r_safe.data or {}).get("sql", sql)
+        )
         traces.extend(self._trace_list(r_exec))
         if not r_exec.ok:
             details.extend(r_exec.error or [])
 
         # --- 6) verifier
-        r_ver = self._safe_stage(self.verifier.run, sql=sql, exec_result=r_exec.data)
+        r_ver = self._safe_stage(
+            self.verifier.run, sql=sql, exec_result=(r_exec.data or {})
+        )
         traces.extend(self._trace_list(r_ver))
         verified = bool(r_ver.ok)
 
@@ -203,7 +205,7 @@ class Pipeline:
                 traces.extend(self._trace_list(r_fix))
                 if not r_fix.ok:
                     break
-                sql = r_fix.data.get("sql")
+                sql = (r_fix.data or {}).get("sql")
 
                 r_safe = self._safe_stage(self.safety.run, sql=sql)
                 traces.extend(self._trace_list(r_safe))
@@ -212,7 +214,7 @@ class Pipeline:
                     continue
 
                 r_exec = self._safe_stage(
-                    self.executor.run, sql=r_safe.data.get("sql", sql)
+                    self.executor.run, sql=(r_safe.data or {}).get("sql", sql)
                 )
                 traces.extend(self._trace_list(r_exec))
                 if not r_exec.ok:
@@ -220,7 +222,7 @@ class Pipeline:
                     continue
 
                 r_ver = self._safe_stage(
-                    self.verifier.run, sql=sql, exec_result=r_exec.data
+                    self.verifier.run, sql=sql, exec_result=(r_exec.data or {})
                 )
                 traces.extend(self._trace_list(r_ver))
                 verified = bool(r_ver.ok)

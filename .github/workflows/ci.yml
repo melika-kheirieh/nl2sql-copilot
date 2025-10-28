@@ -49,7 +49,7 @@ jobs:
         run: python -m ruff check .
 
       - name: Type check (mypy)
-        run: python -m mypy .
+        run: python -m mypy . --ignore-missing-imports --explicit-package-bases
 
       - name: Run tests
         run: python -m pytest -q

@@ -5,9 +5,10 @@ import os
 import json
 import time
 from pathlib import Path
+from typing import Iterable, List, Dict, Any
 
 # ---- app imports
-from nl2sql.pipeline import Pipeline
+from nl2sql.pipeline import Pipeline, FinalResult
 from nl2sql.ambiguity_detector import AmbiguityDetector
 from nl2sql.planner import Planner
 from nl2sql.generator import Generator
@@ -26,7 +27,10 @@ class DummyLLM:
     provider_id = "dummy-llm"
 
     def plan(self, *, user_query: str, schema_preview: str):
-        text = f"- understand question: {user_query}\n- identify tables\n- join if needed\n- filter\n- order/limit"
+        text = (
+            f"- understand question: {user_query}\n"
+            "- identify tables\n- join if needed\n- filter\n- order/limit"
+        )
         return text, 0, 0, 0.0
 
     def generate_sql(
@@ -68,11 +72,13 @@ def build_pipeline(db_path: Path, use_openai: bool) -> Pipeline:
     # DB adapter
     db = SQLiteAdapter(str(db_path))
     executor = Executor(db)
+
     # LLM provider
     if use_openai and os.getenv("OPENAI_API_KEY"):
         llm = OpenAIProvider()
     else:
         llm = DummyLLM()
+
     # stages
     detector = AmbiguityDetector()
     planner = Planner(llm)
@@ -80,6 +86,7 @@ def build_pipeline(db_path: Path, use_openai: bool) -> Pipeline:
     safety = Safety()
     verifier = Verifier()
     repair = Repair(llm)
+
     # pipeline
     return Pipeline(
         detector=detector,
@@ -92,33 +99,49 @@ def build_pipeline(db_path: Path, use_openai: bool) -> Pipeline:
     )
 
 
-def run_benchmark(queries, schema_preview, pipeline: Pipeline, outfile: Path):
-    results = []
+def _sum_cost(traces: Iterable[Dict[str, Any]]) -> float:
+    total = 0.0
+    for tr in traces:
+        try:
+            total += float(tr.get("cost_usd", 0.0))
+        except Exception:
+            # ignore bad values
+            pass
+    return total
+
+
+def _is_safe_fail(ok: bool, details: List[str] | None) -> float:
+    """Return 1.0 when pipeline failed due to unsafe SQL (heuristic)."""
+    if ok:
+        return 0.0
+    txt = " ".join(details or []).lower()
+    return 1.0 if "unsafe" in txt else 0.0
+
+
+def run_benchmark(
+    queries: List[str], schema_preview: str, pipeline: Pipeline, outfile: Path
+) -> None:
+    results: List[Dict[str, Any]] = []
     for q in queries:
         t0 = time.perf_counter()
-        r = pipeline.run(user_query=q, schema_preview=schema_preview)
-        latency_ms = (time.perf_counter() - t0) * 1000
-        ok = (not r.get("ambiguous")) and ("error" not in r)
+        res: FinalResult = pipeline.run(user_query=q, schema_preview=schema_preview)
+        latency_ms = (time.perf_counter() - t0) * 1000.0
 
-        traces = r.get("traces", [])
-        cost_sum = 0.0
-        for t in traces:
-            try:
-                cost_sum += float(t.get("cost_usd", 0.0))
-            except Exception:
-                pass
+        ok = (not res.ambiguous) and (not res.error) and bool(res.ok)
+        traces = res.traces or []
+        cost_sum = _sum_cost(traces)
 
         results.append(
             {
                 "query": q,
                 "exec_acc": 1.0 if ok else 0.0,
-                "safe_fail": 0.0 if ok else 1.0 if "unsafe" in str(r).lower() else 0.0,
+                "safe_fail": _is_safe_fail(ok, res.details),
                 "latency_ms": latency_ms,
                 "cost_usd": cost_sum,
                 "repair_attempts": sum(1 for t in traces if t.get("stage") == "repair"),
-                "provider": pipeline.generator.llm.provider_id
-                if hasattr(pipeline.generator, "llm")
-                else "unknown",
+                "provider": getattr(
+                    getattr(pipeline.generator, "llm", None), "provider_id", "unknown"
+                ),
             }
         )
 
@@ -129,7 +152,7 @@ def run_benchmark(queries, schema_preview, pipeline: Pipeline, outfile: Path):
     print(f"[OK] wrote {len(results)} rows → {outfile}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--outfile", default="benchmarks/results/demo.jsonl")
     parser.add_argument("--db", default="data/bench_demo.db")
@@ -140,9 +163,9 @@ def main():
     )
     args = parser.parse_args()
 
-    ROOT = Path(__file__).resolve().parents[1]  # project root
-    outfile = (ROOT / args.outfile).resolve()
-    db_path = (ROOT / args.db).resolve()
+    root = Path(__file__).resolve().parents[1]  # project root
+    outfile = (root / args.outfile).resolve()
+    db_path = (root / args.db).resolve()
 
     ensure_demo_db(db_path)
     pipe = build_pipeline(db_path, use_openai=args.use_openai)

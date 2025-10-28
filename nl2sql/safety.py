@@ -86,3 +86,5 @@ class Safety:
                 stage=self.name, duration_ms=(time.perf_counter() - t0) * 1000
             ),
         )
+
+    run = check
