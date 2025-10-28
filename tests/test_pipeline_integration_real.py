@@ -2,34 +2,53 @@ import sqlite3
 from nl2sql.pipeline import Pipeline
 from nl2sql.types import StageResult, StageTrace
 
+
 # --- Realistic dummy stages ----------------------------------
 class DetectorOK:
     """Always returns no ambiguities."""
+
     def detect(self, *a, **k):
         return []
+
 
 class PlannerLLM:
     def run(self, *, user_query, schema_preview):
         plan = f"Understand user query '{user_query}' and map to table."
-        return StageResult(ok=True, data={"plan": plan},
-                           trace=StageTrace(stage="planner", duration_ms=0))
+        return StageResult(
+            ok=True,
+            data={"plan": plan},
+            trace=StageTrace(stage="planner", duration_ms=0),
+        )
+
 
 class GeneratorSimple:
     def run(self, *, user_query, schema_preview, plan_text, clarify_answers):
         sql = "SELECT city, COUNT(*) AS cnt FROM users GROUP BY city"
-        return StageResult(ok=True, data={"sql": sql, "rationale": plan_text},
-                           trace=StageTrace(stage="generator", duration_ms=0))
+        return StageResult(
+            ok=True,
+            data={"sql": sql, "rationale": plan_text},
+            trace=StageTrace(stage="generator", duration_ms=0),
+        )
+
 
 class SafetyReadOnly:
     def run(self, *, sql):
         if sql.strip().lower().startswith("select"):
-            return StageResult(ok=True, data={"sql": sql},
-                               trace=StageTrace(stage="safety", duration_ms=0))
-        return StageResult(ok=False, error=["Unsafe query"],
-                           trace=StageTrace(stage="safety", duration_ms=0, notes={"reason": "unsafe"}))
+            return StageResult(
+                ok=True,
+                data={"sql": sql},
+                trace=StageTrace(stage="safety", duration_ms=0),
+            )
+        return StageResult(
+            ok=False,
+            error=["Unsafe query"],
+            trace=StageTrace(stage="safety", duration_ms=0, notes={"reason": "unsafe"}),
+        )
+
 
 class ExecutorSQLite:
     """Executes the SQL query on a temporary in-memory SQLite database."""
+
     def __init__(self):
         # create in-memory DB and seed some rows
         self.conn = sqlite3.connect(":memory:")
@@ -38,9 +57,14 @@ class ExecutorSQLite:
     def _seed(self):
         cur = self.conn.cursor()
         cur.execute("CREATE TABLE users (id INTEGER, city TEXT)")
-        cur.executemany("INSERT INTO users VALUES (?, ?)", [
-            (1, "Berlin"), (2, "Berlin"), (3, "Munich"),
-        ])
+        cur.executemany(
+            "INSERT INTO users VALUES (?, ?)",
+            [
+                (1, "Berlin"),
+                (2, "Berlin"),
+                (3, "Munich"),
+            ],
+        )
         self.conn.commit()
 
     def run(self, *, sql):
@@ -50,7 +74,7 @@ class ExecutorSQLite:
         return StageResult(
             ok=True,
             data={"rows": rows},
-            trace=StageTrace(stage="executor", duration_ms=0)
+            trace=StageTrace(stage="executor", duration_ms=0),
         )
 
 
@@ -58,13 +82,18 @@ class VerifierCheckCount:
     def run(self, *, sql, exec_result):
         rows = exec_result.get("rows", [])
         ok = bool(rows and "city" in rows[0] and "cnt" in rows[0])
-        return StageResult(ok=ok, data={"verified": ok},
-                           trace=StageTrace(stage="verifier", duration_ms=0,
-                                            notes={"rows_len": len(rows)}))
+        return StageResult(
+            ok=ok,
+            data={"verified": ok},
+            trace=StageTrace(
+                stage="verifier", duration_ms=0, notes={"rows_len": len(rows)}
+            ),
+        )
 
 
 class RepairNoOp:
     """Dummy repair stage (not triggered in this scenario)."""
+
     def run(self, *a, **k):
         return StageResult(ok=False, error=["no repair needed"])
 
@@ -82,7 +111,9 @@ def test_pipeline_end_to_end_real_sqlite():
         repair=RepairNoOp(),
     )
 
-    result = pipe.run(user_query="count users per city", schema_preview="users(id, city)")
+    result = pipe.run(
+        user_query="count users per city", schema_preview="users(id, city)"
+    )
 
     # --- Assertions ---
     assert result.ok
