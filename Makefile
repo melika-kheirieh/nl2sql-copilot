@@ -1,25 +1,28 @@
-# Usage: `make <target>`  (e.g., `make test`)
-# Lines with `##` appear in `make help`.
 
 # ---------- Config ----------
-PY          ?= python3
-PIP         ?= pip
-UVICORN     ?= uvicorn
-PACKAGE_DIRS= nl2sql adapters app benchmarks
-TESTS       = tests
-DOCKER_IMG  = nl2sql-copilot
-PORT        ?= 8000
+VENV_DIR   ?= .venv
+PY         ?= $(if $(wildcard $(VENV_DIR)/bin/python),$(VENV_DIR)/bin/python,python3)
+PIP        ?= $(if $(wildcard $(VENV_DIR)/bin/pip),$(VENV_DIR)/bin/pip,pip)
+UVICORN    ?= $(if $(wildcard $(VENV_DIR)/bin/uvicorn),$(VENV_DIR)/bin/uvicorn,uvicorn)
+DOCKER_IMG ?= nl2sql-copilot
+PORT       ?= 8000
 
 .DEFAULT_GOAL := help
 
 # ---------- Meta ----------
 .PHONY: help
 help: ## Show this help
-	@awk 'BEGIN {FS := ":.*##"; printf "\n\033[1mAvailable targets:\033[0m\n"} /^[a-zA-Z0-9_.-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 } /^.PHONY:/ {gsub(/.PHONY: /, "", $$0)}' $(MAKEFILE_LIST)
+	@printf "\n\033[1mAvailable targets:\033[0m\n"
+	@awk 'BEGIN {FS = ":.*##"} /^[[:alnum:]_.-]+:.*##/ {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-# ---------- Dev basics ----------
+# ---------- Setup ----------
+.PHONY: venv
+venv: ## Create virtual environment in .venv/
+	python3 -m venv $(VENV_DIR)
+	$(PIP) install --upgrade pip wheel
+
 .PHONY: install
-install: ## Install runtime dependencies
+install: ## Install runtime dependencies inside venv
 	$(PIP) install -r requirements.txt
 
 .PHONY: dev-install
@@ -29,36 +32,36 @@ dev-install: ## Install dev tools (ruff, mypy, pytest, coverage, uvicorn, etc.)
 
 # ---------- Quality ----------
 .PHONY: format
-format: ## Auto-format & quick-fix with ruff
-	ruff format .
-	ruff check . --fix
+format: ## Auto-format & fix with ruff
+	$(VENV_DIR)/bin/ruff format .
+	$(VENV_DIR)/bin/ruff check . --fix
 
 .PHONY: lint
-lint: ## Lint only (no auto-fix)
-	ruff check .
-	mypy .
+lint: ## Run linting and type checking
+	$(VENV_DIR)/bin/ruff check .
+	$(VENV_DIR)/bin/mypy .
 
 .PHONY: typecheck
-typecheck: ## mypy type checking
-	mypy .
+typecheck: ## Run type checking only
+	$(VENV_DIR)/bin/mypy .
 
 # ---------- Tests ----------
 .PHONY: test
-test: ## Run unit tests (quiet)
-	PYTHONPATH=$$PWD pytest -q
+test: ## Run pytest quietly
+	PYTHONPATH=$$PWD $(VENV_DIR)/bin/pytest -q
 
 .PHONY: cov
-cov: ## Run tests with coverage (package-only)
-	PYTHONPATH=$$PWD pytest --cov=nl2sql --cov-report=term-missing
+cov: ## Run tests with coverage
+	PYTHONPATH=$$PWD $(VENV_DIR)/bin/pytest --cov=nl2sql --cov-report=term-missing
 
-# ---------- App run ----------
+# ---------- Run ----------
 .PHONY: run
-run: ## Run FastAPI (dev, reload)
+run: ## Run FastAPI app (reload mode)
 	$(UVICORN) app.main:app --reload --host 0.0.0.0 --port $(PORT)
 
 # ---------- Benchmarks ----------
 .PHONY: bench
-bench: ## Run minimal benchmark script (no API keys needed with DummyLLM fallbacks)
+bench: ## Run benchmark suite (DummyLLM fallback)
 	$(PY) -m benchmarks.run
 
 # ---------- Docker ----------
@@ -76,5 +79,5 @@ clean: ## Remove Python caches
 	rm -rf __pycache__ .pytest_cache .mypy_cache
 
 .PHONY: clean-all
-clean-all: clean ## Remove build artifacts & coverage files
+clean-all: clean ## Remove build artifacts and coverage
 	rm -rf dist build .coverage *.egg-info
