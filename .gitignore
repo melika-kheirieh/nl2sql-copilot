@@ -1,6 +1,46 @@
-.env
+# --- Python basics ---
 __pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# --- Virtual environments ---
 .venv/
+env/
+venv/
+
+# --- IDEs & OS ---
 .idea/
+.vscode/
 .DS_Store
+
+# --- Environment & secrets ---
+.env
+.env.*
+*.key
+*.pem
+
+# --- Test & lint caches ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Build & packaging ---
+build/
+dist/
+*.egg-info/
+.wheels/
+
+# --- Data & databases ---
 data/
+*.sqlite
+*.db
+
+# --- Logs & temp files ---
+logs/
+*.log
+tmp/
+*.tmp
