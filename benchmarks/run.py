@@ -1,11 +1,11 @@
-# benchmarks/run.py
 from __future__ import annotations
+
 import argparse
 import os
 import json
 import time
 from pathlib import Path
-from typing import Iterable, List, Dict, Any
+from typing import Iterable, List, Dict, Any, Protocol, Tuple, Optional
 
 # ---- app imports
 from nl2sql.pipeline import Pipeline, FinalResult
@@ -22,11 +22,34 @@ from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.llm.openai_provider import OpenAIProvider
 
 
-# ---- fallbacks: Dummy LLM (so it runs without API keys)
+# ---- LLM protocol (unifies OpenAIProvider and DummyLLM for mypy)
+class LLMProvider(Protocol):
+    """Minimal interface required by Planner/Generator/Repair stages."""
+
+    provider_id: str
+
+    def plan(self, *, user_query: str, schema_preview: str) -> Tuple[str, int, int, float]:
+        ...
+
+    def generate_sql(
+        self,
+        *,
+        user_query: str,
+        schema_preview: str,
+        plan_text: str,
+        clarify_answers: Optional[Any] = None,
+    ) -> Tuple[str, str, int, int, float]:
+        ...
+
+    def repair(self, *, sql: str, error_msg: str, schema_preview: str) -> Tuple[str, int, int, float]:
+        ...
+
+
+# ---- fallback: Dummy LLM (so it runs without API keys)
 class DummyLLM:
     provider_id = "dummy-llm"
 
-    def plan(self, *, user_query: str, schema_preview: str):
+    def plan(self, *, user_query: str, schema_preview: str) -> Tuple[str, int, int, float]:
         text = (
             f"- understand question: {user_query}\n"
             "- identify tables\n- join if needed\n- filter\n- order/limit"
@@ -39,14 +62,14 @@ class DummyLLM:
         user_query: str,
         schema_preview: str,
         plan_text: str,
-        clarify_answers=None,
-    ):
+        clarify_answers: Optional[Any] = None,
+    ) -> Tuple[str, str, int, int, float]:
         # naive demo SQL (so pipeline flows end-to-end)
         sql = "SELECT 1 AS one;"
         rationale = "Demo SQL from DummyLLM"
         return sql, rationale, 0, 0, 0.0
 
-    def repair(self, *, sql: str, error_msg: str, schema_preview: str):
+    def repair(self, *, sql: str, error_msg: str, schema_preview: str) -> Tuple[str, int, int, float]:
         return sql, 0, 0, 0.0
 
 
@@ -73,11 +96,12 @@ def build_pipeline(db_path: Path, use_openai: bool) -> Pipeline:
     db = SQLiteAdapter(str(db_path))
     executor = Executor(db)
 
-    # LLM provider
+    # LLM provider (typed to the Protocol so mypy accepts either provider)
+    llm: LLMProvider
     if use_openai and os.getenv("OPENAI_API_KEY"):
-        llm = OpenAIProvider()
+        llm = OpenAIProvider()  # conforms to LLMProvider
     else:
-        llm = DummyLLM()
+        llm = DummyLLM()        # conforms to LLMProvider
 
     # stages
     detector = AmbiguityDetector()
