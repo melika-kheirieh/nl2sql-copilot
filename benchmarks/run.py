@@ -28,8 +28,9 @@ class LLMProvider(Protocol):
 
     provider_id: str
 
-    def plan(self, *, user_query: str, schema_preview: str) -> Tuple[str, int, int, float]:
-        ...
+    def plan(
+        self, *, user_query: str, schema_preview: str
+    ) -> Tuple[str, int, int, float]: ...
 
     def generate_sql(
         self,
@@ -38,18 +39,20 @@ class LLMProvider(Protocol):
         schema_preview: str,
         plan_text: str,
         clarify_answers: Optional[Any] = None,
-    ) -> Tuple[str, str, int, int, float]:
-        ...
+    ) -> Tuple[str, str, int, int, float]: ...
 
-    def repair(self, *, sql: str, error_msg: str, schema_preview: str) -> Tuple[str, int, int, float]:
-        ...
+    def repair(
+        self, *, sql: str, error_msg: str, schema_preview: str
+    ) -> Tuple[str, int, int, float]: ...
 
 
 # ---- fallback: Dummy LLM (so it runs without API keys)
 class DummyLLM:
     provider_id = "dummy-llm"
 
-    def plan(self, *, user_query: str, schema_preview: str) -> Tuple[str, int, int, float]:
+    def plan(
+        self, *, user_query: str, schema_preview: str
+    ) -> Tuple[str, int, int, float]:
         text = (
             f"- understand question: {user_query}\n"
             "- identify tables\n- join if needed\n- filter\n- order/limit"
@@ -69,7 +72,9 @@ class DummyLLM:
         rationale = "Demo SQL from DummyLLM"
         return sql, rationale, 0, 0, 0.0
 
-    def repair(self, *, sql: str, error_msg: str, schema_preview: str) -> Tuple[str, int, int, float]:
+    def repair(
+        self, *, sql: str, error_msg: str, schema_preview: str
+    ) -> Tuple[str, int, int, float]:
         return sql, 0, 0, 0.0
 
 
@@ -101,7 +106,7 @@ def build_pipeline(db_path: Path, use_openai: bool) -> Pipeline:
     if use_openai and os.getenv("OPENAI_API_KEY"):
         llm = OpenAIProvider()  # conforms to LLMProvider
     else:
-        llm = DummyLLM()        # conforms to LLMProvider
+        llm = DummyLLM()  # conforms to LLMProvider
 
     # stages
     detector = AmbiguityDetector()
