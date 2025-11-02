@@ -12,3 +12,4 @@ psycopg[binary]~=3.2
 ruff
 gradio
 sqlalchemy
+types-requests

@@ -18,7 +18,7 @@ from pathlib import Path
 import time
 import json
 import uuid
-from typing import Union, Optional, Dict
+from typing import Union, Optional, Dict, TypedDict, Any, cast
 
 router = APIRouter(prefix="/nl2sql")
 
@@ -27,20 +27,24 @@ router = APIRouter(prefix="/nl2sql")
 # Files are stored under /tmp, mapped by a short-lived db_id
 # -------------------------------
 _DB_UPLOAD_DIR = os.getenv("DB_UPLOAD_DIR", "/tmp/nl2sql_dbs")
-_DB_TTL_SECONDS = int(os.getenv("DB_TTL_SECONDS", "7200"))  # default 2 hours
+_DB_TTL_SECONDS: int = int(os.getenv("DB_TTL_SECONDS", "7200"))  # default 2 hours
 os.makedirs(_DB_UPLOAD_DIR, exist_ok=True)
 
+
+class DBEntry(TypedDict):
+    path: str
+    ts: float
+
+
 # In-memory map: db_id -> {"path": str, "ts": float}
-_DB_MAP: Dict[str, Dict[str, object]] = {}
+_DB_MAP: Dict[str, DBEntry] = {}
 
 # -------------------------------
 # Default DB resolution
 # -------------------------------
 DB_MODE = os.getenv("DB_MODE", "sqlite").lower()  # "sqlite" or "postgres"
 POSTGRES_DSN = os.getenv("POSTGRES_DSN")
-DEFAULT_SQLITE_DB = os.getenv(
-    "DEFAULT_SQLITE_DB", "data/chinook.db"
-)  # keep your current default
+DEFAULT_SQLITE_DB: str = os.getenv("DEFAULT_SQLITE_DB", "data/chinook.db")
 
 # -------------------------------
 # Path to persist db_id → file map
@@ -48,14 +52,13 @@ DEFAULT_SQLITE_DB = os.getenv(
 _DB_MAP_PATH = Path("data/uploads/db_map.json")
 _DB_MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-
 UPLOAD_DIR = Path("data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)  # ensure folder exists
 
 DEFAULT_SQLITE_PATH = "data/Chinook_Sqlite.sqlite"
 
 
-def _save_db_map():
+def _save_db_map() -> None:
     """Persist the in-memory DB map to disk as JSON."""
     try:
         with open(_DB_MAP_PATH, "w") as f:
@@ -64,15 +67,22 @@ def _save_db_map():
         print(f"⚠️ Failed to save DB map: {e}")
 
 
-def _load_db_map():
+def _load_db_map() -> None:
     """Load the DB map from disk if it exists (called on startup)."""
     global _DB_MAP
     if _DB_MAP_PATH.exists():
         try:
             with open(_DB_MAP_PATH, "r") as f:
                 data = json.load(f)
+            # Be liberal in what we accept; validate into TypedDict
             if isinstance(data, dict):
-                _DB_MAP.update(data)
+                restored: Dict[str, DBEntry] = {}
+                for k, v in data.items():
+                    path = v.get("path")
+                    ts = v.get("ts")
+                    if isinstance(path, str) and isinstance(ts, (int, float)):
+                        restored[k] = {"path": path, "ts": float(ts)}
+                _DB_MAP.update(restored)
                 print(f"📂 Restored {_DB_MAP_PATH} with {len(_DB_MAP)} entries.")
         except Exception as e:
             print(f"⚠️ Failed to load DB map: {e}")
@@ -81,13 +91,11 @@ def _load_db_map():
 def _cleanup_db_map() -> None:
     """Remove expired uploaded DB files (best-effort)."""
     now = time.time()
-    expired = [
-        k for k, v in _DB_MAP.items() if now - float(v.get("ts", 0)) > _DB_TTL_SECONDS
-    ]
+    expired = [k for k, v in _DB_MAP.items() if (now - v["ts"]) > _DB_TTL_SECONDS]
     for k in expired:
-        path = _DB_MAP[k].get("path")
+        path: str = _DB_MAP[k]["path"]
         try:
-            if isinstance(path, str) and os.path.exists(path):
+            if os.path.exists(path):
                 os.remove(path)
         except Exception:
             pass
@@ -98,11 +106,11 @@ def _resolve_sqlite_path(db_id: Optional[str]) -> str:
     """Resolve a SQLite file path from db_id or fallback to default."""
     _cleanup_db_map()
     if db_id and db_id in _DB_MAP:
-        return str(_DB_MAP[db_id]["path"])
+        return _DB_MAP[db_id]["path"]
     return DEFAULT_SQLITE_DB
 
 
-def _select_adapter(db_id: str | None):
+def _select_adapter(db_id: Optional[str]):
     mode = os.getenv("DB_MODE", "sqlite").lower()
     if mode == "postgres":
         dsn = os.environ.get("POSTGRES_DSN")
@@ -113,23 +121,23 @@ def _select_adapter(db_id: str | None):
     # sqlite mode
     if db_id:
         _cleanup_db_map()
-        db_path = None
+        db_path: Optional[str] = None
         # first check runtime map
         if db_id in _DB_MAP:
-            db_path = _DB_MAP[db_id].get("path")
+            db_path = _DB_MAP[db_id]["path"]
         # fallback: check /tmp or uploads
         if not db_path or not os.path.exists(db_path):
             fallback_tmp = os.path.join(_DB_UPLOAD_DIR, f"{db_id}.sqlite")
-            fallback_uploads = UPLOAD_DIR / f"{db_id}.sqlite"
+            fallback_uploads = str(UPLOAD_DIR / f"{db_id}.sqlite")
             for candidate in (fallback_tmp, fallback_uploads):
                 if os.path.exists(candidate):
-                    db_path = str(candidate)
+                    db_path = candidate
                     break
         if not db_path or not os.path.exists(db_path):
             raise HTTPException(
                 status_code=400, detail="invalid db_id (file not found)"
             )
-        return SQLiteAdapter(str(db_path))
+        return SQLiteAdapter(db_path)
 
     # fallback to default Chinook
     if not Path(DEFAULT_SQLITE_PATH).exists():
@@ -169,17 +177,28 @@ def _build_pipeline(adapter: Union[PostgresAdapter, SQLiteAdapter]) -> Pipeline:
 # -------------------------------
 # Helpers
 # -------------------------------
-def _to_dict(obj):
-    """Safely convert dataclass → dict."""
-    return asdict(obj) if is_dataclass(obj) else obj
+def _to_dict(obj: Any) -> Any:
+    """Safely convert dataclass instance → dict, otherwise return as-is.
+
+    Note: dataclasses.is_dataclass returns True for both classes and instances.
+    We must exclude classes; mypy cannot refine this perfectly, so we ignore arg-type.
+    """
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return asdict(obj)  # type: ignore[arg-type]
+    return obj
 
 
-def _round_trace(t: dict) -> dict:
+def _round_trace(t: Dict[str, Any]) -> Dict[str, Any]:
     """Round float fields to keep responses tidy and stable."""
     if t.get("cost_usd") is not None:
-        t["cost_usd"] = round(t["cost_usd"], 6)
+        # Ensure numeric before rounding
+        cost = t["cost_usd"]
+        if isinstance(cost, (int, float)):
+            t["cost_usd"] = round(float(cost), 6)
     if t.get("duration_ms") is not None:
-        t["duration_ms"] = round(t["duration_ms"], 2)
+        dur = t["duration_ms"]
+        if isinstance(dur, (int, float)):
+            t["duration_ms"] = round(float(dur), 2)
     return t
 
 
@@ -244,18 +263,22 @@ def nl2sql_handler(request: NL2SQLRequest):
     pipeline = _build_pipeline(adapter)
 
     # 2) Resolve schema_preview (optional in request)
-    provided_preview = getattr(request, "schema_preview", None)
-    schema_preview = (
-        provided_preview
-        if provided_preview not in ("", None)
-        else _derive_schema_preview(adapter)
+    provided_preview_any: Any = getattr(request, "schema_preview", None)
+    provided_preview: Optional[str] = cast(Optional[str], provided_preview_any)
+
+    derived_preview: str = _derive_schema_preview(adapter)
+    schema_preview_opt: Optional[str] = (
+        provided_preview if provided_preview not in ("", None) else derived_preview
     )
+
+    # Guarantee a str for Pipeline.run (mypy requirement)
+    final_preview: str = schema_preview_opt or ""
 
     # 3) Run pipeline
     try:
         result = pipeline.run(
-            user_query=request.query,  # assumes NL2SQLRequest has `query`
-            schema_preview=schema_preview,  # may be empty string if adapter can't derive
+            user_query=request.query,  # assumes NL2SQLRequest has `query: str`
+            schema_preview=final_preview,  # str guaranteed
         )
     except Exception as exc:
         # Hard failure in pipeline itself
@@ -291,7 +314,7 @@ def nl2sql_handler(request: NL2SQLRequest):
     )
 
 
-def _derive_schema_preview(adapter) -> str:
+def _derive_schema_preview(adapter: Union[PostgresAdapter, SQLiteAdapter]) -> str:
     """
     Build a strict, exact-cased schema preview for the LLM.
     Works for SQLite adapters by querying sqlite_master / pragma table_info.
@@ -299,7 +322,10 @@ def _derive_schema_preview(adapter) -> str:
     import sqlite3
     import os
 
-    db_path = getattr(adapter, "db_path", None) or getattr(adapter, "path", None)
+    # Adapters may expose db_path or path; both are str in our codebase
+    db_path: Optional[str] = cast(
+        Optional[str], getattr(adapter, "db_path", None)
+    ) or cast(Optional[str], getattr(adapter, "path", None))
     if not db_path or not os.path.exists(db_path):
         return ""
 
