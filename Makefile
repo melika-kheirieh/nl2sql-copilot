@@ -60,6 +60,11 @@ test: ## Run pytest quietly
 cov: ## Run tests with coverage
 	PYTHONPATH=$$PWD $(PYTEST) --cov=nl2sql --cov-report=term-missing
 
+# ---------- Pre-commit ----------
+.PHONY: precommit
+precommit: ## Run all pre-commit hooks on all files
+	pre-commit run --all-files
+
 # ---------- Run ----------
 .PHONY: run
 run: ## Run FastAPI app (reload mode)
