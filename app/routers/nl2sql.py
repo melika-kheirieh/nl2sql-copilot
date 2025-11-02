@@ -300,9 +300,7 @@ def nl2sql_handler(request: NL2SQLRequest):
     provided_preview_any: Any = getattr(request, "schema_preview", None)
     provided_preview: Optional[str] = cast(Optional[str], provided_preview_any)
 
-    final_preview: str = (
-        provided_preview if provided_preview not in (None, "") else derived_preview_val
-    )
+    final_preview: str = provided_preview or derived_preview_val
 
     # 3) Run pipeline
     try:
