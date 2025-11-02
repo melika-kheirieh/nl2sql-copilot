@@ -1,8 +1,8 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI
-from app.routers import nl2sql
+from fastapi import FastAPI # noqa: E402
+from app.routers import nl2sql # noqa: E402
 
 
 
