@@ -23,8 +23,16 @@ from typing import Union, Optional, Dict, TypedDict, Any, cast
 router = APIRouter(prefix="/nl2sql")
 
 # --- Database adapter selection ---
-if os.getenv("DB_MODE", "sqlite") == "postgres":
-    _db = PostgresAdapter(os.environ["POSTGRES_DSN"])
+DB_MODE = os.getenv("DB_MODE", "sqlite").lower()
+
+_db: Union[PostgresAdapter, SQLiteAdapter]
+if DB_MODE == "postgres":
+    dsn = os.environ.get("POSTGRES_DSN")
+    if not dsn:
+        raise RuntimeError(
+            "POSTGRES_DSN environment variable is required in postgres mode"
+        )
+    _db = PostgresAdapter(dsn)
 else:
     _db = SQLiteAdapter("data/chinook.db")
 
@@ -279,25 +287,22 @@ def nl2sql_handler(request: NL2SQLRequest):
     db_id = getattr(request, "db_id", None)
     adapter: Optional[Union[PostgresAdapter, SQLiteAdapter]] = None
 
-    if not db_id:
-        pipeline = _pipeline
-        derived_preview = ""
-    else:
+    # 1) Pick pipeline (+ optional per-request adapter)
+    if db_id:
         adapter = _select_adapter(db_id)
         pipeline = _build_pipeline(adapter)
-        derived_preview = _derive_schema_preview(adapter)
+        derived_preview_val: str = _derive_schema_preview(adapter)
+    else:
+        pipeline = _pipeline
+        derived_preview_val = ""  # no adapter → no derive
 
-    # 2) Resolve schema_preview (optional in request)
+    # 2) Resolve schema_preview
     provided_preview_any: Any = getattr(request, "schema_preview", None)
     provided_preview: Optional[str] = cast(Optional[str], provided_preview_any)
 
-    derived_preview: str = _derive_schema_preview(adapter)
-    schema_preview_opt: Optional[str] = (
-        provided_preview if provided_preview not in ("", None) else derived_preview
+    final_preview: str = (
+        provided_preview if provided_preview not in (None, "") else derived_preview_val
     )
-
-    # Guarantee a str for Pipeline.run (mypy requirement)
-    final_preview: str = schema_preview_opt or ""
 
     # 3) Run pipeline
     try:
