@@ -1,9 +1,12 @@
-
 # ---------- Config ----------
 VENV_DIR   ?= .venv
 PY         ?= $(if $(wildcard $(VENV_DIR)/bin/python),$(VENV_DIR)/bin/python,python3)
 PIP        ?= $(if $(wildcard $(VENV_DIR)/bin/pip),$(VENV_DIR)/bin/pip,pip)
 UVICORN    ?= $(if $(wildcard $(VENV_DIR)/bin/uvicorn),$(VENV_DIR)/bin/uvicorn,uvicorn)
+RUFF       ?= $(if $(wildcard $(VENV_DIR)/bin/ruff),$(VENV_DIR)/bin/ruff,ruff)
+MYPY       ?= $(if $(wildcard $(VENV_DIR)/bin/mypy),$(VENV_DIR)/bin/mypy,mypy)
+PYTEST     ?= $(if $(wildcard $(VENV_DIR)/bin/pytest),$(VENV_DIR)/bin/pytest,pytest)
+
 DOCKER_IMG ?= nl2sql-copilot
 PORT       ?= 8000
 
@@ -30,29 +33,32 @@ dev-install: ## Install dev tools (ruff, mypy, pytest, coverage, uvicorn, etc.)
 	$(PIP) install -U pip wheel
 	$(PIP) install ruff mypy pytest pytest-cov uvicorn
 
+.PHONY: bootstrap
+bootstrap: venv dev-install ## Create venv and install dev tools
+
 # ---------- Quality ----------
 .PHONY: format
 format: ## Auto-format & fix with ruff
-	$(VENV_DIR)/bin/ruff format .
-	$(VENV_DIR)/bin/ruff check . --fix
+	$(RUFF) format .
+	$(RUFF) check . --fix
 
 .PHONY: lint
 lint: ## Run linting and type checking
-	$(VENV_DIR)/bin/ruff check .
-	$(VENV_DIR)/bin/mypy .
+	$(RUFF) check .
+	$(MYPY) .
 
 .PHONY: typecheck
 typecheck: ## Run type checking only
-	$(VENV_DIR)/bin/mypy .
+	$(MYPY) .
 
 # ---------- Tests ----------
 .PHONY: test
 test: ## Run pytest quietly
-	PYTHONPATH=$$PWD $(VENV_DIR)/bin/pytest -q
+	PYTHONPATH=$$PWD $(PYTEST) -q
 
 .PHONY: cov
 cov: ## Run tests with coverage
-	PYTHONPATH=$$PWD $(VENV_DIR)/bin/pytest --cov=nl2sql --cov-report=term-missing
+	PYTHONPATH=$$PWD $(PYTEST) --cov=nl2sql --cov-report=term-missing
 
 # ---------- Run ----------
 .PHONY: run

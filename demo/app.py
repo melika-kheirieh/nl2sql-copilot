@@ -3,7 +3,7 @@ import requests
 import gradio as gr
 
 API_UPLOAD = "http://localhost:8000/api/v1/nl2sql/upload_db"
-API_QUERY  = "http://localhost:8000/api/v1/nl2sql"
+API_QUERY = "http://localhost:8000/api/v1/nl2sql"
 
 
 def upload_db(file_obj):
@@ -44,8 +44,12 @@ def query_to_sql(user_query, db_id, debug):
 
     # Flags summary
     ambiguous = "Yes" if d.get("ambiguous") else "No"
-    safety = ("Allowed" if d.get("safety", {}).get("allowed", True) else f"Blocked: {d.get('safety', {}).get('blocked_reason')}")
-    verification = ("Passed" if d.get("verification", {}).get("passed") else "Failed")
+    safety = (
+        "Allowed"
+        if d.get("safety", {}).get("allowed", True)
+        else f"Blocked: {d.get('safety', {}).get('blocked_reason')}"
+    )
+    verification = "Passed" if d.get("verification", {}).get("passed") else "Failed"
     repair = d.get("repair", {})
     repair_text = f"Applied: {repair.get('applied', False)}, Attempts: {repair.get('attempts', 0)}"
 
@@ -70,7 +74,9 @@ with gr.Blocks(title="NL2SQL Copilot") as demo:
     db_state = gr.State(value=None)
 
     with gr.Row():
-        db_file = gr.File(label="Upload SQLite (.db/.sqlite)", file_types=[".db", ".sqlite"])
+        db_file = gr.File(
+            label="Upload SQLite (.db/.sqlite)", file_types=[".db", ".sqlite"]
+        )
         upload_btn = gr.Button("Upload DB")
     db_msg = gr.Markdown()
     upload_btn.click(upload_db, inputs=[db_file], outputs=[db_state, db_msg])
@@ -100,7 +106,16 @@ with gr.Blocks(title="NL2SQL Copilot") as demo:
     run.click(
         query_to_sql,
         inputs=[q, db_state, debug],
-        outputs=[badges, sql_out, exp_out, res_out, trace, repair_candidates, repair_diff, timings],
+        outputs=[
+            badges,
+            sql_out,
+            exp_out,
+            res_out,
+            trace,
+            repair_candidates,
+            repair_diff,
+            timings,
+        ],
     )
 
 if __name__ == "__main__":

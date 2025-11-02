@@ -36,12 +36,17 @@ _DB_MAP: Dict[str, Dict[str, object]] = {}
 # -------------------------------
 DB_MODE = os.getenv("DB_MODE", "sqlite").lower()  # "sqlite" or "postgres"
 POSTGRES_DSN = os.getenv("POSTGRES_DSN")
-DEFAULT_SQLITE_DB = os.getenv("DEFAULT_SQLITE_DB", "data/chinook.db")  # keep your current default
+DEFAULT_SQLITE_DB = os.getenv(
+    "DEFAULT_SQLITE_DB", "data/chinook.db"
+)  # keep your current default
+
 
 def _cleanup_db_map() -> None:
     """Remove expired uploaded DB files (best-effort)."""
     now = time.time()
-    expired = [k for k, v in _DB_MAP.items() if now - float(v.get("ts", 0)) > _DB_TTL_SECONDS]
+    expired = [
+        k for k, v in _DB_MAP.items() if now - float(v.get("ts", 0)) > _DB_TTL_SECONDS
+    ]
     for k in expired:
         path = _DB_MAP[k].get("path")
         try:
@@ -51,12 +56,14 @@ def _cleanup_db_map() -> None:
             pass
         _DB_MAP.pop(k, None)
 
+
 def _resolve_sqlite_path(db_id: Optional[str]) -> str:
     """Resolve a SQLite file path from db_id or fallback to default."""
     _cleanup_db_map()
     if db_id and db_id in _DB_MAP:
         return str(_DB_MAP[db_id]["path"])
     return DEFAULT_SQLITE_DB
+
 
 def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapter]:
     """
@@ -66,7 +73,9 @@ def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapte
     """
     if DB_MODE == "postgres":
         if not POSTGRES_DSN:
-            raise HTTPException(status_code=500, detail="POSTGRES_DSN is not configured")
+            raise HTTPException(
+                status_code=500, detail="POSTGRES_DSN is not configured"
+            )
         return PostgresAdapter(POSTGRES_DSN)
 
     # sqlite mode
@@ -75,11 +84,13 @@ def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapte
     # If not, ensure your adapter enforces PRAGMA query_only=ON and prevents DDL/DML.
     return SQLiteAdapter(sqlite_path)
 
+
 # -------------------------------
 # LLM providers & shared components (stateless)
 # -------------------------------
 def get_llm():
     return OpenAIProvider()
+
 
 _detector = AmbiguityDetector()
 _planner = Planner(get_llm())
@@ -87,6 +98,7 @@ _generator = Generator(get_llm())
 _safety = Safety()
 _verifier = Verifier()
 _repair = Repair(get_llm())
+
 
 def _build_pipeline(adapter: Union[PostgresAdapter, SQLiteAdapter]) -> Pipeline:
     """Build a fresh Pipeline with a per-request Executor bound to the chosen adapter."""
@@ -101,12 +113,14 @@ def _build_pipeline(adapter: Union[PostgresAdapter, SQLiteAdapter]) -> Pipeline:
         repair=_repair,
     )
 
+
 # -------------------------------
 # Helpers
 # -------------------------------
 def _to_dict(obj):
     """Safely convert dataclass → dict."""
     return asdict(obj) if is_dataclass(obj) else obj
+
 
 def _round_trace(t: dict) -> dict:
     """Round float fields to keep responses tidy and stable."""
@@ -115,6 +129,7 @@ def _round_trace(t: dict) -> dict:
     if t.get("duration_ms") is not None:
         t["duration_ms"] = round(t["duration_ms"], 2)
     return t
+
 
 # -------------------------------
 # Upload endpoint (SQLite only)
@@ -130,16 +145,22 @@ async def upload_db(file: UploadFile = File(...)):
     - Files are stored under /tmp and cleaned by TTL.
     """
     if DB_MODE != "sqlite":
-        raise HTTPException(status_code=400, detail="DB upload is only supported in sqlite mode")
+        raise HTTPException(
+            status_code=400, detail="DB upload is only supported in sqlite mode"
+        )
 
     filename = file.filename or "db.sqlite"
     if not (filename.endswith(".db") or filename.endswith(".sqlite")):
-        raise HTTPException(status_code=400, detail="Only .db or .sqlite files are allowed")
+        raise HTTPException(
+            status_code=400, detail="Only .db or .sqlite files are allowed"
+        )
 
     data = await file.read()
     max_bytes = int(os.getenv("UPLOAD_MAX_BYTES", str(20 * 1024 * 1024)))  # 20 MB
     if len(data) > max_bytes:
-        raise HTTPException(status_code=400, detail=f"File too large (> {max_bytes} bytes)")
+        raise HTTPException(
+            status_code=400, detail=f"File too large (> {max_bytes} bytes)"
+        )
 
     db_id = str(uuid.uuid4())
     out_path = os.path.join(_DB_UPLOAD_DIR, f"{db_id}.sqlite")
@@ -151,6 +172,7 @@ async def upload_db(file: UploadFile = File(...)):
 
     _DB_MAP[db_id] = {"path": out_path, "ts": time.time()}
     return {"db_id": db_id}
+
 
 # -------------------------------
 # Main NL2SQL endpoint
