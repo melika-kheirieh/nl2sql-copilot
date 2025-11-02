@@ -10,3 +10,5 @@ python-dotenv==1.1.1
 openai==2.6.1
 psycopg[binary]~=3.2
 ruff
+gradio
+sqlalchemy

@@ -1,8 +1,9 @@
 from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from app.routers import nl2sql
 
-load_dotenv()
 
 
 app = FastAPI(
