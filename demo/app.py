@@ -149,8 +149,7 @@ with gr.Blocks(title="NL2SQL Copilot") as demo:
 
     with gr.Tab("Repair"):
         repair_candidates = gr.JSON(label="Candidates")
-        repair_diff = gr.Code(label="Diff (if any)", language="diff")
-
+        repair_diff = gr.Textbox(label="Diff (if any)", lines=10)
     with gr.Tab("Timings"):
         timings = gr.Dataframe(headers=["metric", "ms"], datatype=["str", "number"])
 
