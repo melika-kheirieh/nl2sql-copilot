@@ -1,4 +1,3 @@
-import io
 import requests
 import gradio as gr
 
@@ -14,54 +13,105 @@ def upload_db(file_obj):
         return None, "Only .db or .sqlite files are allowed."
     size = getattr(file_obj, "size", None)
     if size and size > 20 * 1024 * 1024:
-        return None, "File too large (>20MB). Use a smaller demo DB."
+        return None, "File too large (>20MB) for this demo."
 
-    # Read bytes
-    with open(file_obj.name, "rb") as f:
-        data = f.read()
+    # Gradio gives a temp file path as file_obj.name
+    files = {"file": (name, open(file_obj.name, "rb"), "application/octet-stream")}
+    try:
+        r = requests.post(API_UPLOAD, files=files, timeout=120)
+    finally:
+        # best-effort close
+        try:
+            files["file"][1].close()
+        except Exception:
+            pass
 
-    r = requests.post(
-        API_UPLOAD,
-        files={"file": (name, io.BytesIO(data), "application/octet-stream")},
-        timeout=60,
-    )
-    r.raise_for_status()
-    db_id = r.json().get("db_id")
-    return db_id, f"Uploaded OK. db_id={db_id}"
+    if r.ok:
+        data = r.json()
+        db_id = data.get("db_id")
+        if not db_id:
+            return None, f"Upload returned no db_id: {data}"
+        return db_id, f"Uploaded OK. db_id={db_id}"
+    # Show backend error body
+    try:
+        body = r.json()
+    except ValueError:
+        body = r.text
+    return None, f"Upload failed ({r.status_code}): {body}"
 
 
-def query_to_sql(user_query, db_id, debug):
-    payload = {"query": user_query, "debug": bool(debug)}
-    if db_id:
-        payload["db_id"] = db_id
+def _post_query(payload: dict):
+    """Helper: POST and return (ok, data_or_error_string)."""
     r = requests.post(API_QUERY, json=payload, timeout=120)
-    r.raise_for_status()
-    d = r.json()
+    if r.ok:
+        try:
+            return True, r.json()
+        except ValueError:
+            return False, "Backend returned non-JSON body."
+    try:
+        body = r.json()
+    except ValueError:
+        body = r.text
+    return False, f"{r.status_code} {body}"
 
-    sql = d.get("sql_final") or d.get("sql") or ""
-    explanation = d.get("explanation", "")
-    result = d.get("result", [])
 
-    # Flags summary
-    ambiguous = "Yes" if d.get("ambiguous") else "No"
+def query_to_sql(user_query: str, db_id: str | None, _debug_flag: bool):
+    # Build minimal schema-compliant payload.
+    # Server expects request.query (name is 'query' per router code).
+    base_payload = {"query": user_query.strip() if user_query else ""}
+
+    # First try WITH db_id (if present). If backend rejects (422), retry WITHOUT.
+    if db_id:
+        ok, data = _post_query({**base_payload, "db_id": db_id})
+        if not ok and isinstance(data, str) and data.startswith("422"):
+            # Retry without db_id in case request model forbids extra fields.
+            ok, data = _post_query(base_payload)
+    else:
+        ok, data = _post_query(base_payload)
+
+    if not ok:
+        # Surface backend error text to the UI
+        err_badges = f"Error: {data}"
+        return (
+            err_badges,  # badges
+            "",  # sql_out
+            "",  # exp_out
+            {},  # result (tab)
+            [],  # trace (tab)
+            [],  # repair_candidates (tab)
+            "",  # repair_diff (tab)
+            [],  # timings (tab)
+        )
+
+    d = data
+
+    # Map fields to UI (server returns: ambiguous, sql, rationale, traces)
+    sql = d.get("sql") or d.get("sql_final") or ""
+    explanation = d.get("rationale") or d.get("explanation") or ""
+    result = d.get("result", {})  # optional/maybe absent
+    trace_list = d.get("traces") or d.get("trace") or []
+
+    ambiguous_flag = "Yes" if d.get("ambiguous") else "No"
     safety = (
         "Allowed"
         if d.get("safety", {}).get("allowed", True)
         else f"Blocked: {d.get('safety', {}).get('blocked_reason')}"
     )
     verification = "Passed" if d.get("verification", {}).get("passed") else "Failed"
-    repair = d.get("repair", {})
+    repair = d.get("repair", {}) or {}
     repair_text = f"Applied: {repair.get('applied', False)}, Attempts: {repair.get('attempts', 0)}"
 
-    timings = d.get("timings_ms", {})
+    timings = d.get("timings_ms", {}) or {}
     timings_table = [[k, timings[k]] for k in sorted(timings.keys())]
 
+    badges_text = f"Ambiguous: {ambiguous_flag} | Safety: {safety} | Verification: {verification} | Repair: {repair_text}"
+
     return (
-        f"Ambiguous: {ambiguous} | Safety: {safety} | Verification: {verification} | Repair: {repair_text}",
+        badges_text,
         sql,
         explanation,
         result,
-        d.get("trace", []),
+        trace_list,
         repair.get("candidates", []),
         repair.get("diff", ""),
         timings_table,
@@ -83,7 +133,8 @@ with gr.Blocks(title="NL2SQL Copilot") as demo:
 
     with gr.Row():
         q = gr.Textbox(label="Question", scale=4)
-        debug = gr.Checkbox(label="Debug", value=True, scale=1)
+        # keep the checkbox in UI if you like, but we don't send it to backend
+        debug = gr.Checkbox(label="Debug (UI only)", value=True, scale=1)
         run = gr.Button("Run")
 
     badges = gr.Markdown()
@@ -98,10 +149,10 @@ with gr.Blocks(title="NL2SQL Copilot") as demo:
 
     with gr.Tab("Repair"):
         repair_candidates = gr.JSON(label="Candidates")
-        repair_diff = gr.Code(label="SQL Diff", language="sql")
+        repair_diff = gr.Code(label="Diff (if any)", language="diff")
 
     with gr.Tab("Timings"):
-        timings = gr.Dataframe(headers=["stage", "ms"], datatype=["str", "number"])
+        timings = gr.Dataframe(headers=["metric", "ms"], datatype=["str", "number"])
 
     run.click(
         query_to_sql,
