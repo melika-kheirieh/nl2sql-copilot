@@ -31,34 +31,50 @@ install: ## Install runtime dependencies inside venv
 .PHONY: dev-install
 dev-install: ## Install dev tools (ruff, mypy, pytest, coverage, uvicorn, etc.)
 	$(PIP) install -U pip wheel
-	$(PIP) install ruff mypy pytest pytest-cov uvicorn
+	$(PIP) install ruff mypy pytest pytest-cov uvicorn pre-commit
 
 .PHONY: bootstrap
 bootstrap: venv dev-install ## Create venv and install dev tools
 
-# ---------- Quality ----------
+# ---------- Quality (read-only for CI) ----------
+.PHONY: fmt-check
+fmt-check: ## Verify formatting without modifying files
+	$(RUFF) format . --check
+
+.PHONY: lint
+lint: ## Run linting
+	$(RUFF) check .
+
+.PHONY: typecheck
+typecheck: ## Run type checking only
+	$(MYPY) . --ignore-missing-imports --explicit-package-bases
+
+# ---------- Quality (write mode for local dev) ----------
 .PHONY: format
 format: ## Auto-format & fix with ruff
 	$(RUFF) format .
 	$(RUFF) check . --fix
 
-.PHONY: lint
-lint: ## Run linting and type checking
-	$(RUFF) check .
-	$(MYPY) .
-
-.PHONY: typecheck
-typecheck: ## Run type checking only
-	$(MYPY) .
-
 # ---------- Tests ----------
 .PHONY: test
-test: ## Run pytest quietly
+test: ## Run fast test suite (exclude slow)
+	PYTHONPATH=$$PWD $(PYTEST) -q -m "not slow"
+
+.PHONY: test-all
+test-all: ## Run full test suite including slow tests
 	PYTHONPATH=$$PWD $(PYTEST) -q
 
 .PHONY: cov
 cov: ## Run tests with coverage
 	PYTHONPATH=$$PWD $(PYTEST) --cov=nl2sql --cov-report=term-missing
+
+# ---------- Unified gate for CI ----------
+.PHONY: check
+check: ## Run format check, lint, typecheck, and fast tests
+	make fmt-check
+	make lint
+	make typecheck
+	make test
 
 # ---------- Pre-commit ----------
 .PHONY: precommit
@@ -87,7 +103,7 @@ docker-run: ## Run Docker container on port $(PORT)
 # ---------- Clean ----------
 .PHONY: clean
 clean: ## Remove Python caches
-	rm -rf __pycache__ .pytest_cache .mypy_cache
+	rm -rf __pycache__ .pytest_cache .mypy_cache .ruff_cache
 
 .PHONY: clean-all
 clean-all: clean ## Remove build artifacts and coverage
