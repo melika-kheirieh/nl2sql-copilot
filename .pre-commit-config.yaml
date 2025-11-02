@@ -1,0 +1,35 @@
+repos:
+  # --- Basic hygiene checks ---
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  # --- Ruff: linting and formatting ---
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.1
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # --- Mypy: type-checking on staged Python files ---
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        args:
+          - --ignore-missing-imports
+          - --explicit-package-bases
+
+  # --- Run pytest via Makefile when pushing ---
+  - repo: local
+    hooks:
+      - id: pytest-on-push
+        name: pytest (pre-push)
+        entry: make test
+        language: system
+        pass_filenames: false
+        stages: [push]
