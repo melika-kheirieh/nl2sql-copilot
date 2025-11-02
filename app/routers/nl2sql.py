@@ -22,6 +22,30 @@ from typing import Union, Optional, Dict, TypedDict, Any, cast
 
 router = APIRouter(prefix="/nl2sql")
 
+# --- Database adapter selection ---
+if os.getenv("DB_MODE", "sqlite") == "postgres":
+    _db = PostgresAdapter(os.environ["POSTGRES_DSN"])
+else:
+    _db = SQLiteAdapter("data/chinook.db")
+
+
+# --- Build a single shared pipeline for all routes ---
+def _make_pipeline() -> Pipeline:
+    llm = OpenAIProvider()
+    return Pipeline(
+        detector=AmbiguityDetector(),
+        planner=Planner(llm=llm),
+        generator=Generator(llm=llm),
+        safety=Safety(),
+        executor=Executor(db=_db),
+        verifier=Verifier(),
+        repair=Repair(llm=llm),
+    )
+
+
+_pipeline: Pipeline = _make_pipeline()
+
+
 # -------------------------------
 # Runtime DB registry (for uploaded SQLite files)
 # Files are stored under /tmp, mapped by a short-lived db_id
@@ -252,15 +276,16 @@ async def upload_db(file: UploadFile = File(...)):
 # -------------------------------
 @router.post("", name="nl2sql_handler")
 def nl2sql_handler(request: NL2SQLRequest):
-    """
-    Handle NL → SQL pipeline execution.
-    If `db_id` is provided, switch DB adapter for this call.
-    If `schema_preview` is missing, derive it from the selected adapter when possible.
-    """
-    # 1) Select adapter based on db_id (if any)
-    db_id = getattr(request, "db_id", None)  # Optional[str]
-    adapter = _select_adapter(db_id)
-    pipeline = _build_pipeline(adapter)
+    db_id = getattr(request, "db_id", None)
+    adapter: Optional[Union[PostgresAdapter, SQLiteAdapter]] = None
+
+    if not db_id:
+        pipeline = _pipeline
+        derived_preview = ""
+    else:
+        adapter = _select_adapter(db_id)
+        pipeline = _build_pipeline(adapter)
+        derived_preview = _derive_schema_preview(adapter)
 
     # 2) Resolve schema_preview (optional in request)
     provided_preview_any: Any = getattr(request, "schema_preview", None)
@@ -277,8 +302,8 @@ def nl2sql_handler(request: NL2SQLRequest):
     # 3) Run pipeline
     try:
         result = pipeline.run(
-            user_query=request.query,  # assumes NL2SQLRequest has `query: str`
-            schema_preview=final_preview,  # str guaranteed
+            user_query=request.query,
+            schema_preview=final_preview,
         )
     except Exception as exc:
         # Hard failure in pipeline itself

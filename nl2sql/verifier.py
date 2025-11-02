@@ -1,74 +1,114 @@
 import time
+from typing import Any, Iterable
+
 import sqlglot
 from sqlglot import expressions as exp
+
 from nl2sql.types import StageResult, StageTrace
 
 
 class Verifier:
     name = "verifier"
 
-    def run(self, sql: str, exec_result: dict | None) -> StageResult:
+    # ----------------- helpers -----------------
+    @staticmethod
+    def _extract_ok(exec_result: Any) -> bool | None:
+        """Normalize exec_result.ok across dict or object."""
+        if exec_result is None:
+            return None
+        if isinstance(exec_result, dict):
+            return bool(exec_result.get("ok")) if "ok" in exec_result else None
+        if hasattr(exec_result, "ok"):
+            try:
+                return bool(getattr(exec_result, "ok"))
+            except Exception:
+                return None
+        return None
+
+    @staticmethod
+    def _extract_errors(exec_result: Any) -> list[str] | None:
+        """Pull ['...'] from exec_result['error'] or exec_result.error."""
+        val = None
+        if isinstance(exec_result, dict):
+            val = exec_result.get("error")
+        elif hasattr(exec_result, "error"):
+            val = getattr(exec_result, "error")
+
+        if val is None:
+            return None
+        if isinstance(val, str):
+            return [val]
+        if isinstance(val, Iterable):
+            # normalize to list[str]
+            return [str(x) for x in val]
+        return [str(val)]
+
+    @staticmethod
+    def _has_aggregation(tree: exp.Expression) -> bool:
+        for node in tree.walk():
+            if getattr(node, "is_aggregate", False):
+                return True
+            if isinstance(node, (exp.Count, exp.Sum, exp.Avg, exp.Min, exp.Max)):
+                return True
+        return False
+
+    @staticmethod
+    def _has_group_by(select: exp.Select) -> bool:
+        return bool(select.args.get("group"))
+
+    # ------------------- main -------------------
+    def run(self, *, sql: str, exec_result: Any) -> StageResult:
         t0 = time.perf_counter()
 
-        # Defensive: check executor result validity
-        if not exec_result or not isinstance(exec_result, dict):
+        # 1) validate / normalize executor result
+        ok_flag = self._extract_ok(exec_result)
+        if ok_flag is False:
+            errs = self._extract_errors(exec_result) or ["execution_error"]
+            trace_err = StageTrace(
+                stage=self.name,
+                duration_ms=(time.perf_counter() - t0) * 1000,
+                notes={"reason": "execution_error"},
+            )
+            return StageResult(ok=False, error=errs, trace=trace_err)
+
+        if exec_result is None:
+            trace_inv = StageTrace(
+                stage=self.name, duration_ms=(time.perf_counter() - t0) * 1000
+            )
             return StageResult(
                 ok=False,
                 error=["invalid or missing exec_result"],
-                data=None,
-                trace=StageTrace(
-                    stage=self.name, duration_ms=(time.perf_counter() - t0) * 1000
-                ),
+                trace=trace_inv,
             )
 
-        # If executor had rows and no error, consider verified early
-        rows = exec_result.get("rows")
-        if rows is not None and len(rows) > 0:
-            return StageResult(
-                ok=True,
-                data={"verified": True, "rows_checked": len(rows)},
-                trace=StageTrace(
-                    stage=self.name, duration_ms=(time.perf_counter() - t0) * 1000
-                ),
-            )
-
-        # Optional deeper check using SQL structure
-        issues = []
+        # 2) structural verification
         try:
             tree = sqlglot.parse_one(sql)
-            if isinstance(tree, exp.Select):
-                group = tree.args.get("group")
-                aggs = [a for a in tree.find_all(exp.AggFunc)]
-                if aggs and not group:
-                    select_cols = [
-                        c for c in tree.expressions if not isinstance(c, exp.AggFunc)
-                    ]
-                    if select_cols:
-                        issues.append(
-                            "Non-aggregated columns with aggregation but no GROUP BY."
-                        )
         except Exception as e:
-            # parsing failed → skip structural verification gracefully
-            return StageResult(
-                ok=True,
-                data={"verified": True, "note": f"Skipped parse: {e}"},
-                trace=StageTrace(
-                    stage=self.name, duration_ms=(time.perf_counter() - t0) * 1000
-                ),
+            # parsing failed → accept with a note
+            trace_skip = StageTrace(
+                stage=self.name,
+                duration_ms=(time.perf_counter() - t0) * 1000,
+                notes={"note": f"Skipped parse: {e}"},
             )
+            return StageResult(ok=True, data={"verified": True}, trace=trace_skip)
+
+        issues: list[str] = []
+
+        # Detect ANY aggregation without GROUP BY for SELECT statements
+        if isinstance(tree, exp.Select):
+            has_agg = self._has_aggregation(tree)
+            has_group = self._has_group_by(tree)
+            if has_agg and not has_group:
+                issues.append("Aggregation without GROUP BY")
 
         dur = (time.perf_counter() - t0) * 1000
         if issues:
-            return StageResult(
-                ok=False,
-                error=issues,
-                trace=StageTrace(
-                    stage=self.name, duration_ms=dur, notes={"issues": issues}
-                ),
+            trace_bad = StageTrace(
+                stage=self.name, duration_ms=dur, notes={"issues": issues}
             )
+            return StageResult(ok=False, error=issues, trace=trace_bad)
 
-        return StageResult(
-            ok=True,
-            data={"verified": True},
-            trace=StageTrace(stage=self.name, duration_ms=dur),
-        )
+        # 3) success
+        trace_ok = StageTrace(stage=self.name, duration_ms=dur)
+        return StageResult(ok=True, data={"verified": True}, trace=trace_ok)
