@@ -19,10 +19,20 @@ _FORBIDDEN = re.compile(
 # allow: SELECT ...   or   WITH <cte...> SELECT ...
 _ALLOW_SELECT = re.compile(r"^(?:WITH\b.*?\)\s*)?SELECT\b", re.IGNORECASE | re.DOTALL)
 
+# --- New cleanup helpers ---
+_FENCE_SQL = re.compile(r"```sql", re.IGNORECASE)
+_FENCE_ANY = re.compile(r"```")
 
-def _strip_comments(s: str) -> str:
+
+def _sanitize_sql(sql: str) -> str:
+    """Remove markdown fences, comments, and surrounding junk."""
+    s = _FENCE_SQL.sub("", sql)
+    s = _FENCE_ANY.sub("", s)
     s = _COMMENT_BLOCK.sub(" ", s)
     s = _COMMENT_LINE.sub(" ", s)
+    s = s.strip()
+    # remove trailing semicolon safely
+    s = s.rstrip(";").strip()
     return s
 
 
@@ -33,8 +43,13 @@ def _mask_strings(s: str) -> str:
 
 
 def _split_statements(s: str) -> list[str]:
+    """
+    Split only if there are real multiple statements,
+    ignoring harmless trailing semicolons or markdown.
+    """
     parts = [p.strip() for p in s.split(";")]
-    return [p for p in parts if p]
+    parts = [p for p in parts if p]
+    return parts
 
 
 class Safety:
@@ -43,7 +58,9 @@ class Safety:
     def check(self, sql: str) -> StageResult:
         t0 = time.perf_counter()
         print("🧩 SQL candidate:", sql)
-        s = _strip_comments(sql)
+
+        # --- sanitize first ---
+        s = _sanitize_sql(sql)
         s = _mask_strings(s).strip()
 
         stmts = _split_statements(s)
@@ -79,8 +96,8 @@ class Safety:
         return StageResult(
             ok=True,
             data={
-                "sql": sql.strip(),
-                "rationale": "Statement validated as SELECT-only (strings/comments ignored).",
+                "sql": body,
+                "rationale": "Statement validated as SELECT-only (strings/comments/markdown ignored).",
             },
             trace=StageTrace(
                 stage=self.name, duration_ms=(time.perf_counter() - t0) * 1000

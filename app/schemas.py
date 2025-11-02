@@ -4,8 +4,11 @@ from typing import List, Optional, Any, Dict, Mapping, Sequence
 
 class NL2SQLRequest(BaseModel):
     query: str
-    schema_preview: str
-    db_name: Optional[str] = "default"
+    db_id: Optional[str] = None
+    schema_preview: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
 
 
 class TraceModel(BaseModel):
