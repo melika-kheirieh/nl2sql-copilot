@@ -1,34 +1,48 @@
+# Run auto-fix hooks only on commit; run heavy checks (mypy, pytest) on push.
+default_stages: [pre-commit]
+
 repos:
-  # --- Basic hygiene checks ---
+  # --- Basic hygiene checks (auto-fix) — commit only ---
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
-      - id: check-merge-conflict
-      - id: end-of-file-fixer
-      - id: trailing-whitespace
+      - id: check-merge-conflict         # sanity check only
+      - id: end-of-file-fixer            # ensures newline at EOF
+        stages: [pre-commit]
+      - id: trailing-whitespace          # removes trailing spaces
+        stages: [pre-commit]
 
-  # --- Ruff: linting and formatting ---
+  # --- Ruff: linting and formatting (auto-fix) — commit only ---
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.3
     hooks:
       - id: ruff
-        args: [--fix, --exit-non-zero-on-fix]
+        # Allow auto-fix; do not fail if fixes are applied.
+        args: [--fix]
+        stages: [pre-commit]
       - id: ruff-format
+        stages: [pre-commit]
 
-  # --- Mypy: type-checking on staged Python files ---
+  # --- Mypy: type-checking — push only (no edits) ---
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.18.2
     hooks:
       - id: mypy
+        # Run on the entire repo at push time (not just changed files)
+        pass_filenames: false
         args:
+          - .
           - --ignore-missing-imports
           - --explicit-package-bases
+        stages: [pre-push]
 
-  # --- Run pytest via Makefile when pushing ---
+  # --- Pytest: run test suite — push only (no edits) ---
   - repo: local
     hooks:
       - id: pytest-on-push
         name: pytest (pre-push)
+        # If Makefile is present, keep this entry; otherwise use:
+        # entry: bash -lc 'PYTHONPATH=$PWD pytest -q -m "not slow"'
         entry: make test
         language: system
         pass_filenames: false
