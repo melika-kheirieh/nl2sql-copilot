@@ -20,6 +20,7 @@ import json
 import uuid
 from typing import Union, Optional, Dict, TypedDict, Any, cast
 
+__all__ = ["Pipeline", "FinalResult"]
 router = APIRouter(prefix="/nl2sql")
 
 # -------------------------------
