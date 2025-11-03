@@ -10,6 +10,7 @@ python-dotenv==1.1.1
 openai==2.6.1
 psycopg[binary]~=3.2
 prometheus-client>=0.20.0
+types-requests>=2.32.0.20241016
 ruff
 gradio
 sqlalchemy

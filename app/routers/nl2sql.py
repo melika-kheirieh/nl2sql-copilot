@@ -246,13 +246,13 @@ def nl2sql_handler(request: NL2SQLRequest):
     # Resolve schema_preview
     provided_preview_any: Any = getattr(request, "schema_preview", None)
     provided_preview: Optional[str] = cast(Optional[str], provided_preview_any)
-    final_preview: str = provided_preview or derived_preview_val
+    final_preview: Optional[str] = provided_preview or (derived_preview_val or None)
 
-    # Run pipeline
+    # Run pipeline (ensure schema_preview is str for typing)
     try:
         result = pipeline.run(
             user_query=request.query,
-            schema_preview=final_preview,
+            schema_preview=(final_preview or ""),  # pipeline expects str
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Pipeline crash: {exc!s}")
@@ -260,10 +260,15 @@ def nl2sql_handler(request: NL2SQLRequest):
     if not isinstance(result, FinalResult):
         raise HTTPException(status_code=500, detail="Pipeline returned unexpected type")
 
-    if result.ambiguous and result.questions:
-        return ClarifyResponse(ambiguous=True, questions=result.questions)
+    # Ambiguous → 200 with ClarifyResponse schema
+    if result.ambiguous and (result.questions is not None):
+        return ClarifyResponse(
+            ambiguous=True,
+            questions=result.questions,
+        )
 
-    if not result.ok or result.error:
+    # Error → 400, with debug print
+    if (not result.ok) or result.error:
         print("❌ Pipeline failure dump:")
         print("  ok:", result.ok)
         print("  error:", result.error)
@@ -274,6 +279,7 @@ def nl2sql_handler(request: NL2SQLRequest):
             detail="; ".join(result.details or []) or (result.error or "Unknown error"),
         )
 
+    # Success → 200 with NL2SQLResponse schema
     traces = [_round_trace(t) for t in (result.traces or [])]
     return NL2SQLResponse(
         ambiguous=False,

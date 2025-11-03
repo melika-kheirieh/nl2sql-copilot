@@ -34,6 +34,8 @@ repos:
           - .
           - --ignore-missing-imports
           - --explicit-package-bases
+        additional_dependencies:
+          - types-requests>=2.32.0.20241016
         stages: [pre-push]
 
   # --- Pytest: run test suite — push only (no edits) ---
