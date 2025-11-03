@@ -119,3 +119,124 @@ def test_safety_blocks_multiple_nonempty_statements_even_if_second_is_comment():
     sql_bad = "SELECT 1;  /* spacer */  DROP TABLE x;"
     assert s.check(sql).ok
     assert not s.check(sql_bad).ok
+
+
+def test_safety_allows_multiple_ctes():
+    s = Safety()
+    sql = """
+    WITH a AS (SELECT 1 AS x),
+         b AS (SELECT 2 AS y)
+    SELECT a.x, b.y FROM a CROSS JOIN b;
+    """
+    assert s.check(sql).ok
+
+
+def test_safety_allows_with_recursive():
+    s = Safety()
+    sql = """
+    WITH RECURSIVE cnt(x) AS (
+      SELECT 1 UNION ALL SELECT x+1 FROM cnt WHERE x < 3
+    )
+    SELECT * FROM cnt;
+    """
+    assert s.check(sql).ok
+
+
+def test_safety_blocks_zero_width_obfuscation_in_keyword():
+    s = Safety()
+    # "DROP" با zero-width joiner وسط حروف
+    bad = "DR\u200dOP TABLE users;"
+    r = s.check(bad)
+    assert not r.ok
+
+
+def test_safety_ignores_markdown_fences():
+    s = Safety()
+    sql = "```sql\nSELECT 1;\n```"
+    assert s.check(sql).ok
+
+
+def test_safety_semicolon_inside_string_literal_is_ignored():
+    s = Safety()
+    sql = "SELECT 'a; b; c' AS sample;"
+    assert s.check(sql).ok
+
+
+def test_safety_forbidden_keyword_inside_string_literal_ok():
+    s = Safety()
+    sql = "SELECT 'DROP TABLE x' AS note, 'delete from y' AS text;"
+    assert s.check(sql).ok
+
+
+def test_safety_reports_offending_token_in_error_message():
+    s = Safety()
+    r = s.check("  \n  ReIndex  users;")
+    assert not r.ok
+    assert any("reindex" in e.lower() for e in (r.error or []))
+
+
+def test_safety_multiple_statements_with_masked_strings_is_blocked():
+    s = Safety()
+    sql = "SELECT 'abc'; SELECT 1;"
+    r = s.check(sql)
+    assert not r.ok
+
+
+def test_safety_duration_ms_is_int():
+    s = Safety()
+    r = s.check("SELECT 1;")
+    assert isinstance(r.trace.duration_ms, int)
+
+
+def test_safety_allows_explain_select_when_enabled():
+    s = Safety(allow_explain=True)
+    r = s.check("EXPLAIN SELECT * FROM users;")
+    assert r.ok
+
+
+def test_safety_blocks_explain_select_when_disabled():
+    s = Safety(allow_explain=False)
+    r = s.check("EXPLAIN SELECT * FROM users;")
+    assert not r.ok
+
+
+def test_safety_blocks_forbidden_inside_cte_body():
+    s = Safety()
+    sql = """
+    WITH bad AS (DELETE FROM users)
+    SELECT * FROM users;
+    """
+    assert not s.check(sql).ok
+
+
+def test_safety_permits_with_comments_and_newlines_complex():
+    s = Safety()
+    sql = """
+    /* head */ WITH a AS (SELECT 1 /*x*/ AS x) -- inline
+    , b AS (SELECT 2 AS y) /* tail */
+    SELECT a.x, b.y FROM a JOIN b; -- end
+    """
+    assert s.check(sql).ok
+
+
+def test_safety_blocks_bom_prefixed_forbidden():
+    s = Safety()
+    sql = "\ufeffDROP TABLE x;"
+    assert not s.check(sql).ok
+
+
+def test_safety_allows_trailing_double_semicolon():
+    s = Safety()
+    assert s.check("SELECT 1;;").ok
+
+
+@pytest.mark.parametrize("q", ["explain   select 1;", "EXPLAIN\nSELECT 1;"])
+def test_safety_explain_various_spacing_when_enabled(q):
+    s = Safety(allow_explain=True)
+    assert s.check(q).ok
+
+
+def test_safety_stage_name_constant():
+    s = Safety()
+    r = s.check("SELECT 1;")
+    assert r.trace.stage == "safety"
