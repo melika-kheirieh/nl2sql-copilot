@@ -113,3 +113,8 @@ def health():
 def metrics():
     data = generate_latest(REGISTRY)
     return Response(content=data, media_type=CONTENT_TYPE_LATEST)
+
+
+# Backward compatibility for tests & uvicorn targets
+app: FastAPI = application
+__all__ = ["application", "app"]
