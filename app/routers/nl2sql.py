@@ -228,6 +228,9 @@ async def upload_db(file: UploadFile = File(...)):
 # -------------------------------
 # Main NL2SQL endpoint
 # -------------------------------
+# -------------------------------
+# Main NL2SQL endpoint
+# -------------------------------
 @router.post("", name="nl2sql_handler")
 def nl2sql_handler(request: NL2SQLRequest):
     db_id = getattr(request, "db_id", None)
@@ -243,10 +246,10 @@ def nl2sql_handler(request: NL2SQLRequest):
         _derive_schema_preview(adapter) if isinstance(adapter, SQLiteAdapter) else ""
     )
 
-    # Resolve schema_preview
+    # Resolve schema_preview (send None when empty)
     provided_preview_any: Any = getattr(request, "schema_preview", None)
     provided_preview: Optional[str] = cast(Optional[str], provided_preview_any)
-    final_preview: str = provided_preview or derived_preview_val
+    final_preview: Optional[str] = provided_preview or (derived_preview_val or None)
 
     # Run pipeline
     try:
@@ -260,10 +263,18 @@ def nl2sql_handler(request: NL2SQLRequest):
     if not isinstance(result, FinalResult):
         raise HTTPException(status_code=500, detail="Pipeline returned unexpected type")
 
-    if result.ambiguous and result.questions:
-        return ClarifyResponse(ambiguous=True, questions=result.questions)
+    # Ambiguous → 200 with clarify payload
+    if result.ambiguous and (result.questions is not None):
+        return ClarifyResponse(
+            ok=True,  # minimal addition for schema compatibility
+            ambiguous=True,
+            questions=result.questions,
+            traces=result.traces or [],  # safe default to avoid validation errors
+            details=result.details or None,
+        )
 
-    if not result.ok or result.error:
+    # Error → 400
+    if (not result.ok) or result.error:
         print("❌ Pipeline failure dump:")
         print("  ok:", result.ok)
         print("  error:", result.error)
@@ -274,12 +285,16 @@ def nl2sql_handler(request: NL2SQLRequest):
             detail="; ".join(result.details or []) or (result.error or "Unknown error"),
         )
 
+    # Success → 200
     traces = [_round_trace(t) for t in (result.traces or [])]
     return NL2SQLResponse(
+        ok=True,  # minimal addition
         ambiguous=False,
         sql=result.sql,
         rationale=result.rationale,
+        verified=getattr(result, "verified", None),
         traces=traces,
+        details=result.details or None,
     )
 
 
