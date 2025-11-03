@@ -228,9 +228,6 @@ async def upload_db(file: UploadFile = File(...)):
 # -------------------------------
 # Main NL2SQL endpoint
 # -------------------------------
-# -------------------------------
-# Main NL2SQL endpoint
-# -------------------------------
 @router.post("", name="nl2sql_handler")
 def nl2sql_handler(request: NL2SQLRequest):
     db_id = getattr(request, "db_id", None)
@@ -246,16 +243,16 @@ def nl2sql_handler(request: NL2SQLRequest):
         _derive_schema_preview(adapter) if isinstance(adapter, SQLiteAdapter) else ""
     )
 
-    # Resolve schema_preview (send None when empty)
+    # Resolve schema_preview
     provided_preview_any: Any = getattr(request, "schema_preview", None)
     provided_preview: Optional[str] = cast(Optional[str], provided_preview_any)
     final_preview: Optional[str] = provided_preview or (derived_preview_val or None)
 
-    # Run pipeline
+    # Run pipeline (ensure schema_preview is str for typing)
     try:
         result = pipeline.run(
             user_query=request.query,
-            schema_preview=final_preview,
+            schema_preview=(final_preview or ""),  # pipeline expects str
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Pipeline crash: {exc!s}")
@@ -263,17 +260,14 @@ def nl2sql_handler(request: NL2SQLRequest):
     if not isinstance(result, FinalResult):
         raise HTTPException(status_code=500, detail="Pipeline returned unexpected type")
 
-    # Ambiguous → 200 with clarify payload
+    # Ambiguous → 200 with ClarifyResponse schema
     if result.ambiguous and (result.questions is not None):
         return ClarifyResponse(
-            ok=True,  # minimal addition for schema compatibility
             ambiguous=True,
             questions=result.questions,
-            traces=result.traces or [],  # safe default to avoid validation errors
-            details=result.details or None,
         )
 
-    # Error → 400
+    # Error → 400, with debug print
     if (not result.ok) or result.error:
         print("❌ Pipeline failure dump:")
         print("  ok:", result.ok)
@@ -285,16 +279,13 @@ def nl2sql_handler(request: NL2SQLRequest):
             detail="; ".join(result.details or []) or (result.error or "Unknown error"),
         )
 
-    # Success → 200
+    # Success → 200 with NL2SQLResponse schema
     traces = [_round_trace(t) for t in (result.traces or [])]
     return NL2SQLResponse(
-        ok=True,  # minimal addition
         ambiguous=False,
         sql=result.sql,
         rationale=result.rationale,
-        verified=getattr(result, "verified", None),
         traces=traces,
-        details=result.details or None,
     )
 
 
