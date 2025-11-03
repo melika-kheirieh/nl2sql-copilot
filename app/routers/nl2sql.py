@@ -168,6 +168,18 @@ def _build_pipeline(adapter: Union[PostgresAdapter, SQLiteAdapter]) -> Pipeline:
     )
 
 
+# --- Module-level default Pipeline instance for no-db_id requests ---
+# It lets tests monkeypatch `Pipeline.run` and avoids building adapters on each call.
+try:
+    _pipeline: Pipeline = _build_pipeline(SQLiteAdapter(":memory:"))
+except Exception as e:
+    # Fallback to a file-based sqlite if in-memory init fails in some environments
+    print(
+        f"⚠️ default _pipeline init failed on :memory: → {e}; falling back to data/chinook.db"
+    )
+    _pipeline = _build_pipeline(SQLiteAdapter("data/chinook.db"))
+
+
 # -------------------------------
 # Helpers (unchanged)
 # -------------------------------
@@ -232,16 +244,22 @@ async def upload_db(file: UploadFile = File(...)):
 def nl2sql_handler(request: NL2SQLRequest):
     db_id = getattr(request, "db_id", None)
 
-    # Pick adapter per-request (default or uploaded or postgres)
-    adapter = _select_adapter(db_id)
+    # Declare once to avoid mypy no-redef
+    pipeline_obj: Pipeline
+    derived_preview_val: str
 
-    # Build pipeline lazily with this adapter
-    pipeline = _build_pipeline(adapter)
-
-    # Derive schema preview only for sqlite with a real path
-    derived_preview_val: str = (
-        _derive_schema_preview(adapter) if isinstance(adapter, SQLiteAdapter) else ""
-    )
+    if not db_id:
+        # Use module-level pipeline instance (already initialized)
+        pipeline_obj = cast(Pipeline, _pipeline)
+        derived_preview_val = ""
+    else:
+        adapter = _select_adapter(db_id)
+        pipeline_obj = _build_pipeline(adapter)
+        derived_preview_val = (
+            _derive_schema_preview(adapter)
+            if isinstance(adapter, SQLiteAdapter)
+            else ""
+        )
 
     # Resolve schema_preview
     provided_preview_any: Any = getattr(request, "schema_preview", None)
@@ -250,7 +268,7 @@ def nl2sql_handler(request: NL2SQLRequest):
 
     # Run pipeline (ensure schema_preview is str for typing)
     try:
-        result = pipeline.run(
+        result = pipeline_obj.run(
             user_query=request.query,
             schema_preview=(final_preview or ""),  # pipeline expects str
         )
@@ -260,14 +278,11 @@ def nl2sql_handler(request: NL2SQLRequest):
     if not isinstance(result, FinalResult):
         raise HTTPException(status_code=500, detail="Pipeline returned unexpected type")
 
-    # Ambiguous → 200 with ClarifyResponse schema
+    # Ambiguous → 200
     if result.ambiguous and (result.questions is not None):
-        return ClarifyResponse(
-            ambiguous=True,
-            questions=result.questions,
-        )
+        return ClarifyResponse(ambiguous=True, questions=result.questions)
 
-    # Error → 400, with debug print
+    # Error → 400 (with debug dump)
     if (not result.ok) or result.error:
         print("❌ Pipeline failure dump:")
         print("  ok:", result.ok)
@@ -279,7 +294,7 @@ def nl2sql_handler(request: NL2SQLRequest):
             detail="; ".join(result.details or []) or (result.error or "Unknown error"),
         )
 
-    # Success → 200 with NL2SQLResponse schema
+    # Success → 200
     traces = [_round_trace(t) for t in (result.traces or [])]
     return NL2SQLResponse(
         ambiguous=False,
