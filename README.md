@@ -1,6 +1,6 @@
 # 🧩 NL2SQL Copilot
 
-A modular **Text-to-SQL Copilot** that converts natural language questions into safe and verified SQL queries.  
+A modular **Text-to-SQL Copilot** that converts natural language questions into safe and verified SQL queries.
 Built with **FastAPI**, **LangGraph**, and **SQLAlchemy**, designed for read-only databases and evaluation on Spider/Dr.Spider benchmarks.
 
 ---
@@ -96,4 +96,3 @@ mypy .
 ## 📄 License
 
 MIT © 2025 Melika Kheirieh
-
