@@ -80,7 +80,7 @@ class Pipeline:
         self,
         *,
         user_query: str,
-        schema_preview: str,
+        schema_preview: str | None = None,
         clarify_answers: Optional[Dict[str, Any]] = None,
     ) -> FinalResult:
         traces: List[dict] = []
@@ -88,6 +88,7 @@ class Pipeline:
         sql: Optional[str] = None
         rationale: Optional[str] = None
         verified: Optional[bool] = None
+        schema_preview = schema_preview or ""
 
         # --- 1) ambiguity detection ---
         try:
