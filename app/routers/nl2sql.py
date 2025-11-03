@@ -285,11 +285,13 @@ async def upload_db(file: UploadFile = File(...)):
 @router.post("", name="nl2sql_handler")
 def nl2sql_handler(request: NL2SQLRequest):
     db_id = getattr(request, "db_id", None)
-    adapter: Optional[Union[PostgresAdapter, SQLiteAdapter]] = None
 
     # 1) Pick pipeline (+ optional per-request adapter)
+    pipeline: Pipeline
     if db_id:
-        adapter = _select_adapter(db_id)
+        adapter = _select_adapter(db_id)  # returns PostgresAdapter | SQLiteAdapter
+        # If _select_adapter could theoretically return None, uncomment the next line:
+        # assert adapter is not None, "adapter must be set when db_id is provided"
         pipeline = _build_pipeline(adapter)
         derived_preview_val: str = _derive_schema_preview(adapter)
     else:
@@ -299,7 +301,6 @@ def nl2sql_handler(request: NL2SQLRequest):
     # 2) Resolve schema_preview
     provided_preview_any: Any = getattr(request, "schema_preview", None)
     provided_preview: Optional[str] = cast(Optional[str], provided_preview_any)
-
     final_preview: str = provided_preview or derived_preview_val
 
     # 3) Run pipeline
