@@ -223,16 +223,30 @@ def _to_dict(obj: Any) -> Any:
     return obj
 
 
-def _round_trace(t: Dict[str, Any]) -> Dict[str, Any]:
-    if t.get("cost_usd") is not None:
-        cost = t["cost_usd"]
-        if isinstance(cost, (int, float)):
-            t["cost_usd"] = round(float(cost), 6)
-    if t.get("duration_ms") is not None:
-        dur = t["duration_ms"]
-        if isinstance(dur, (int, float)):
-            t["duration_ms"] = round(float(dur), 2)
-    return t
+def _round_trace(t: Any) -> Dict[str, Any]:
+    """Normalize a trace entry to a dict and coerce duration_ms to int."""
+    if isinstance(t, dict):
+        stage = t.get("stage", "?")
+        ms = t.get("duration_ms", 0)
+        notes = t.get("notes")
+        cost = t.get("cost_usd")
+    else:
+        stage = getattr(t, "stage", "?")
+        ms = getattr(t, "duration_ms", 0)
+        notes = getattr(t, "notes", None)
+        cost = getattr(t, "cost_usd", None)
+
+    try:
+        ms_int = int(ms) if ms is not None else 0
+    except Exception:
+        ms_int = 0
+
+    return {
+        "stage": str(stage) if stage is not None else "?",
+        "duration_ms": ms_int,
+        "notes": notes,
+        "cost_usd": cost,
+    }
 
 
 # -------------------------------
