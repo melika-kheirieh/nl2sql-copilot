@@ -1,18 +1,4 @@
 from dataclasses import asdict, is_dataclass
-from fastapi import APIRouter, HTTPException, UploadFile, File
-from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
-from nl2sql.pipeline import Pipeline as _Pipeline, FinalResult as _FinalResult
-from nl2sql.ambiguity_detector import AmbiguityDetector
-from nl2sql.safety import Safety
-from nl2sql.planner import Planner
-from nl2sql.generator import Generator
-from adapters.llm.openai_provider import OpenAIProvider
-from nl2sql.executor import Executor
-from nl2sql.verifier import Verifier
-from nl2sql.repair import Repair
-from adapters.db.sqlite_adapter import SQLiteAdapter
-from adapters.db.postgres_adapter import PostgresAdapter
-
 import os
 from pathlib import Path
 import time
@@ -20,10 +6,25 @@ import json
 import uuid
 from typing import Union, Optional, Dict, TypedDict, Any, cast
 
-# Re-export for tests & public API stability (pytest expects nl2sql.Pipeline)
+from fastapi import APIRouter, HTTPException, UploadFile, File
+
+from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
+from nl2sql.pipeline import Pipeline as _Pipeline, FinalResult as _FinalResult
+from nl2sql.ambiguity_detector import AmbiguityDetector
+from nl2sql.safety import Safety
+from nl2sql.planner import Planner
+from nl2sql.generator import Generator
+from nl2sql.executor import Executor
+from nl2sql.verifier import Verifier
+from nl2sql.repair import Repair
+from adapters.llm.openai_provider import OpenAIProvider
+from adapters.db.sqlite_adapter import SQLiteAdapter
+from adapters.db.postgres_adapter import PostgresAdapter
+
 Pipeline = _Pipeline
 FinalResult = _FinalResult
 __all__ = ["Pipeline", "FinalResult"]
+
 
 router = APIRouter(prefix="/nl2sql")
 

@@ -31,7 +31,7 @@ def test_ambiguity_route(monkeypatch):
             traces=[fake_trace("detector")],
         )
 
-    monkeypatch.setattr(nl2sql.Pipeline, "run", fake_run)
+    monkeypatch.setattr(nl2sql._pipeline, "run", fake_run)
 
     resp = client.post(
         path,
@@ -64,7 +64,7 @@ def test_error_route(monkeypatch):
             traces=[fake_trace("safety")],
         )
 
-    monkeypatch.setattr(nl2sql.Pipeline, "run", fake_run)
+    monkeypatch.setattr(nl2sql._pipeline, "run", fake_run)
 
     resp = client.post(
         path,
@@ -94,7 +94,7 @@ def test_success_route(monkeypatch):
             traces=[fake_trace("planner"), fake_trace("generator")],
         )
 
-    monkeypatch.setattr(nl2sql.Pipeline, "run", fake_run)
+    monkeypatch.setattr(nl2sql._pipeline, "run", fake_run)
 
     resp = client.post(
         path,
