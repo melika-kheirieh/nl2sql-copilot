@@ -240,3 +240,53 @@ def test_safety_stage_name_constant():
     s = Safety()
     r = s.check("SELECT 1;")
     assert r.trace.stage == "safety"
+
+
+# Semicolon inside comments should NOT count as new statement
+def test_safety_semicolon_inside_comment_is_ignored():
+    s = Safety()
+    sql = "SELECT 1 -- ; semicolon in comment\n"
+    r = s.check(sql)
+    assert r.ok, r.error
+
+
+# Recursive CTE with DML inside should be blocked
+def test_safety_blocks_dml_inside_recursive_cte():
+    s = Safety()
+    sql = """
+    WITH RECURSIVE bad(x) AS (
+      DELETE FROM users
+    )
+    SELECT * FROM users;
+    """
+    r = s.check(sql)
+    assert not r.ok
+
+
+# --- 3) Zero-width spaces + comment obfuscation around DML
+@pytest.mark.parametrize(
+    "q",
+    [
+        "/* hidden */\u200bDELETE\u200b/* again */ FROM users;",
+        "SELECT 1; \u200b /*x*/ DELETE /*y*/ FROM users;",
+    ],
+)
+def test_safety_obfuscated_dml_is_blocked(q):
+    s = Safety()
+    r = s.check(q)
+    assert not r.ok
+
+
+# Multi-statement with stray semicolon and whitespace
+def test_safety_blocks_stacked_statements_with_whitespace():
+    s = Safety()
+    q = "SELECT 1 ;   \n  DELETE FROM users;"
+    r = s.check(q)
+    assert not r.ok
+
+
+#  ALLOW EXPLAIN (config gate)
+@pytest.mark.parametrize("q", ["explain   select 1;", "EXPLAIN\nSELECT 1;"])
+def test_safety_explain_allowed_when_enabled(q):
+    s = Safety(allow_explain=True)
+    assert s.check(q).ok
