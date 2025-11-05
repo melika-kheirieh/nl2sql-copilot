@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 
 # --- Local ---
 from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
-from nl2sql.pipeline import Pipeline as _Pipeline, FinalResult as _FinalResult
+from nl2sql.pipeline import FinalResult, FinalResult as _FinalResult
 from adapters.llm.openai_provider import OpenAIProvider
 from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.db.postgres_adapter import PostgresAdapter
@@ -23,13 +23,16 @@ from nl2sql.pipeline_factory import (
     pipeline_from_config_with_adapter,
 )
 
-from nl2sql.pipeline import FinalResult
+_PIPELINE: Optional[Any] = None
 
-Runner = Callable[..., FinalResult]
+Runner = Callable[..., _FinalResult]
 
 
 def get_runner() -> Runner:
-    """Default runner for dependency injection (can be overridden in tests)."""
+    """Build pipeline lazily so PYTEST_CURRENT_TEST is respected."""
+    global _PIPELINE
+    if _PIPELINE is None:
+        _PIPELINE = pipeline_from_config(CONFIG_PATH)
     return _PIPELINE.run
 
 
@@ -39,10 +42,11 @@ def _build_pipeline(adapter) -> Any:
     return pipeline_from_config_with_adapter(CONFIG_PATH, adapter=adapter)
 
 
-# Stable public re-exports
-Pipeline = _Pipeline
-FinalResult = _FinalResult
-__all__ = ["Pipeline", "FinalResult"]
+#
+# # Stable public re-exports
+# Pipeline = _Pipeline
+# FinalResult = _FinalResult
+# __all__ = ["Pipeline", "FinalResult"]
 
 router = APIRouter(prefix="/nl2sql")
 

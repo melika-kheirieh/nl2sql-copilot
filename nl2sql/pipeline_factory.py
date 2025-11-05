@@ -234,9 +234,7 @@ def pipeline_from_config_with_adapter(path: str, *, adapter: DBAdapter) -> Pipel
     if is_pytest:
 
         class _StubDetector:
-            def run(
-                self, *, user_query: str, schema_preview: Optional[str] = None
-            ) -> StageResult:
+            def detect(self, *args, **kwargs) -> StageResult:
                 return StageResult(
                     ok=True,
                     data={"questions": []},
@@ -247,11 +245,13 @@ def pipeline_from_config_with_adapter(path: str, *, adapter: DBAdapter) -> Pipel
                     },
                 )
 
+            def run(self, *args, **kwargs) -> StageResult:
+                return self.detect(*args, **kwargs)
+
         class _StubPlanner:
             def __init__(self, llm: Any = None) -> None: ...
-            def run(
-                self, *, user_query: str, schema_preview: Optional[str] = None
-            ) -> StageResult:
+
+            def plan(self, *args, **kwargs) -> StageResult:
                 return StageResult(
                     ok=True,
                     data={"plan": "stub plan"},
@@ -262,16 +262,13 @@ def pipeline_from_config_with_adapter(path: str, *, adapter: DBAdapter) -> Pipel
                     },
                 )
 
+            def run(self, *args, **kwargs) -> StageResult:
+                return self.plan(*args, **kwargs)
+
         class _StubGenerator:
             def __init__(self, llm: Any = None) -> None: ...
-            def run(
-                self,
-                *,
-                user_query: str,
-                schema_preview: Optional[str] = None,
-                plan_text: Optional[str] = None,
-                clarify_answers: Optional[Dict[str, Any]] = None,
-            ) -> StageResult:
+
+            def generate(self, *args, **kwargs) -> StageResult:
                 return StageResult(
                     ok=True,
                     data={"sql": "SELECT 1;", "rationale": "stub"},
@@ -282,9 +279,13 @@ def pipeline_from_config_with_adapter(path: str, *, adapter: DBAdapter) -> Pipel
                     },
                 )
 
+            def run(self, *args, **kwargs) -> StageResult:
+                return self.generate(*args, **kwargs)
+
         class _StubExecutor:
             def __init__(self, db: DBAdapter | None = None) -> None: ...
-            def run(self, *, sql: str) -> StageResult:
+
+            def execute(self, *args, **kwargs) -> StageResult:
                 rows = [{"x": 1}]
                 return StageResult(
                     ok=True,
@@ -296,24 +297,34 @@ def pipeline_from_config_with_adapter(path: str, *, adapter: DBAdapter) -> Pipel
                     },
                 )
 
+            def run(self, *args, **kwargs) -> StageResult:
+                return self.execute(*args, **kwargs)
+
         class _StubVerifier:
-            def run(self, *, sql: str, exec_result: Dict[str, Any]) -> StageResult:
+            def verify(self, *args, **kwargs) -> StageResult:
                 return StageResult(
                     ok=True,
                     data={"verified": True},
                     trace={"stage": "verifier", "duration_ms": 0, "notes": None},
                 )
 
+            def run(self, *args, **kwargs) -> StageResult:
+                return self.verify(*args, **kwargs)
+
         class _StubRepair:
             def __init__(self, llm: Any = None) -> None: ...
-            def run(
-                self, *, sql: str, error_msg: str, schema_preview: Optional[str] = None
-            ) -> StageResult:
+
+            def repair(self, *args, **kwargs) -> StageResult:
+                # return original sql if any, else SELECT 1
+                sql = kwargs.get("sql") or "SELECT 1;"
                 return StageResult(
                     ok=True,
                     data={"sql": sql},
                     trace={"stage": "repair", "duration_ms": 0, "notes": None},
                 )
+
+            def run(self, *args, **kwargs) -> StageResult:
+                return self.repair(*args, **kwargs)
 
         detector = _StubDetector()
         planner = _StubPlanner()
