@@ -7,10 +7,10 @@ import os
 from pathlib import Path
 import time
 import uuid
-from typing import Any, Dict, Optional, TypedDict, Union, Protocol, cast
+from typing import Any, Dict, Optional, TypedDict, Union, Protocol, cast, List
 
 # --- Third-party ---
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 
 # --- Local ---
 from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
@@ -25,6 +25,10 @@ from nl2sql.repair import Repair
 from adapters.llm.openai_provider import OpenAIProvider
 from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.db.postgres_adapter import PostgresAdapter
+from nl2sql.pipeline_factory import (
+    pipeline_from_config,
+    pipeline_from_config_with_adapter,
+)
 
 
 # Stable public re-exports
@@ -52,6 +56,10 @@ _DB_MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 UPLOAD_DIR = Path("data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+CONFIG_PATH = os.getenv("PIPELINE_CONFIG", "configs/sqlite_pipeline.yaml")
+# Build a default pipeline once from config; adapter inside the config will be used.
+_PIPELINE = pipeline_from_config(CONFIG_PATH)
 
 
 class DBEntry(TypedDict):
@@ -110,42 +118,55 @@ _load_db_map()
 # -------------------------------
 # Adapter selection (lazy)
 # -------------------------------
+# ---------- SELECT ADAPTER ----------
 def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapter]:
     """
-    Resolve a DB adapter:
-      - postgres: requires POSTGRES_DSN
-      - sqlite with db_id: uploaded file or fallback locations
-      - sqlite default: DEFAULT_SQLITE_PATH must exist
+    Resolve a DB adapter based on module-level DB_MODE and an optional db_id.
+
+    - postgres mode:
+        requires POSTGRES_DSN in env
+    - sqlite mode:
+        if db_id provided, resolve file by:
+            1) absolute path (if user supplied a full path)
+            2) uploads/{db_id}.sqlite
+            3) uploads/{db_id}.db
+            4) data/{db_id}.sqlite
+            5) data/{db_id}.db
+        else fallback to DEFAULT_SQLITE_PATH
     """
-    mode = os.getenv("DB_MODE", "sqlite").lower()
-    if mode == "postgres":
+    if DB_MODE == "postgres":
         dsn = os.environ.get("POSTGRES_DSN")
         if not dsn:
             raise HTTPException(status_code=500, detail="POSTGRES_DSN env is missing")
         return PostgresAdapter(dsn)
 
     # sqlite mode
-    _cleanup_db_map()
     if db_id:
-        # Check runtime map
-        entry = _DB_MAP.get(db_id)
-        candidates = []
-        if entry and os.path.exists(entry["path"]):
-            candidates.append(entry["path"])
-        # Fallback locations based on convention
-        candidates.append(os.path.join(_DB_UPLOAD_DIR, f"{db_id}.sqlite"))
-        candidates.append(str(UPLOAD_DIR / f"{db_id}.sqlite"))
+        # 1) absolute path
+        p = Path(db_id)
+        candidates: List[Path] = []
+        if p.is_absolute():
+            candidates.append(p)
 
-        for p in candidates:
-            if p and os.path.exists(p):
-                return SQLiteAdapter(p)
+        # 2) uploads/
+        candidates.append(UPLOAD_DIR / f"{db_id}.sqlite")
+        candidates.append(UPLOAD_DIR / f"{db_id}.db")
+
+        # 3) data/
+        candidates.append(Path("data") / f"{db_id}.sqlite")
+        candidates.append(Path("data") / f"{db_id}.db")
+
+        for c in candidates:
+            if c.exists() and c.is_file():
+                return SQLiteAdapter(str(c))
 
         raise HTTPException(status_code=400, detail="invalid db_id (file not found)")
 
-    # default sqlite
-    if not Path(DEFAULT_SQLITE_PATH).exists():
-        raise HTTPException(status_code=500, detail="default DB not found")
-    return SQLiteAdapter(DEFAULT_SQLITE_PATH)
+    # default sqlite fallback
+    default_path = Path(DEFAULT_SQLITE_PATH)
+    if not default_path.exists():
+        raise HTTPException(status_code=500, detail="default SQLite DB not found")
+    return SQLiteAdapter(str(default_path))
 
 
 # -------------------------------
@@ -289,57 +310,52 @@ async def upload_db(file: UploadFile = File(...)):
 # Main NL2SQL endpoint
 # -------------------------------
 @router.post("", name="nl2sql_handler")
-def nl2sql_handler(
-    request: NL2SQLRequest,
-    run: Runner = Depends(get_runner),
-):
+def nl2sql_handler(request: NL2SQLRequest):
     """
-    Handles NL→SQL conversion requests.
-    Uses dependency-injected pipeline runner (get_runner).
-    If db_id provided → builds a temporary per-request pipeline.
+    NL→SQL handler using YAML-driven DI. If 'db_id' is provided, we override only the adapter
+    while keeping all other stages from the YAML config intact.
     """
     db_id = getattr(request, "db_id", None)
-    provided_preview: Optional[str] = cast(
-        Optional[str], getattr(request, "schema_preview", None)
+    provided_preview = (
+        cast(Optional[str], getattr(request, "schema_preview", None)) or ""
     )
 
-    # Select pipeline (DI default vs per-request)
+    # Choose runner: default pipeline from YAML OR per-request override with a specific adapter
     if db_id:
         adapter = _select_adapter(db_id)
-        pipeline = _build_pipeline(adapter)
-        derived_preview = _derive_schema_preview(adapter)
-        runner: Runner = pipeline.run
-        final_preview = provided_preview or derived_preview or ""
+        # Build a temporary pipeline from YAML but bind the per-request adapter
+        pipeline = pipeline_from_config_with_adapter(CONFIG_PATH, adapter=adapter)
+        runner = pipeline.run
+        final_preview = provided_preview  # keep simple; derive only if you have a SQLite schema helper
     else:
-        runner = run
-        final_preview = provided_preview or ""
+        runner = _PIPELINE.run
+        final_preview = provided_preview
 
-    # Execute safely
+    # Execute pipeline
     try:
         result = runner(user_query=request.query, schema_preview=final_preview)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Pipeline crash: {exc!s}")
 
+    # Type sanity
     if not isinstance(result, FinalResult):
         raise HTTPException(status_code=500, detail="Pipeline returned unexpected type")
 
-    # Ambiguous → 200
+    # Ambiguity path → 200 with questions
     if result.ambiguous and (result.questions is not None):
         return ClarifyResponse(ambiguous=True, questions=result.questions)
 
-    # Error → 400 + dump
+    # Error path → 400 with joined details
     if (not result.ok) or result.error:
         print("❌ Pipeline failure dump:")
         print("  ok:", result.ok)
         print("  error:", result.error)
         print("  details:", result.details)
         print("  traces:", result.traces)
-        raise HTTPException(
-            status_code=400,
-            detail="; ".join(result.details or []) or (result.error or "Unknown error"),
-        )
+        message = "; ".join(result.details or []) or "Unknown error"
+        raise HTTPException(status_code=400, detail=message)
 
-    # Success → 200
+    # Success path → 200
     traces = [_round_trace(t) for t in (result.traces or [])]
     return NL2SQLResponse(
         ambiguous=False,

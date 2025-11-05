@@ -1,0 +1,11 @@
+detector: default
+planner: default
+generator: rules    # or "llm" when available
+safety: default
+executor: default
+verifier: basic
+repair: default
+
+adapter:
+  kind: sqlite
+  dsn: data/chinook.db

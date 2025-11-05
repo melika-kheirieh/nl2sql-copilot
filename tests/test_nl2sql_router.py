@@ -252,3 +252,12 @@ def test_traces_are_rounded_to_ints():
         assert isinstance(traces[0]["duration_ms"], int)
     finally:
         app.dependency_overrides.pop(nl2sql.get_runner, None)
+
+
+def test_nl2sql_handler_returns_sql(monkeypatch):
+    payload = {"query": "Top 5 albums by sales"}
+    r = client.post("/nl2sql", json=payload)
+    assert r.status_code == 200
+    data = r.json()
+    assert "sql" in data
+    assert "traces" in data
