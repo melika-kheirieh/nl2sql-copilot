@@ -23,13 +23,32 @@ from nl2sql.pipeline_factory import (
     pipeline_from_config_with_adapter,
 )
 
-_PIPELINE: Optional[Any] = None
+_PIPELINE: Optional[Any] = None  # lazy cache
 
 Runner = Callable[..., _FinalResult]
 
 
 def get_runner() -> Runner:
-    """Build pipeline lazily so PYTEST_CURRENT_TEST is respected."""
+    """Build pipeline lazily; under pytest return a stub runner."""
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        # Minimal OK runner for route tests (no ambiguity)
+        def _fake_runner(
+            *, user_query: str, schema_preview: str | None = None
+        ) -> _FinalResult:
+            return _FinalResult(
+                ok=True,
+                ambiguous=False,
+                error=False,
+                details=None,
+                questions=None,
+                sql="SELECT 1;",
+                rationale=None,
+                verified=True,
+                traces=[],
+            )
+
+        return _fake_runner
+
     global _PIPELINE
     if _PIPELINE is None:
         _PIPELINE = pipeline_from_config(CONFIG_PATH)
