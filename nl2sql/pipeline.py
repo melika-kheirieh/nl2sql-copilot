@@ -2,6 +2,7 @@ from __future__ import annotations
 import traceback
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
+import time
 
 from nl2sql.types import StageResult
 from nl2sql.ambiguity_detector import AmbiguityDetector
@@ -31,6 +32,7 @@ class Pipeline:
     """
     NL2SQL Copilot pipeline.
     Stages return StageResult; final result is a type-safe FinalResult.
+    DI-ready: all dependencies are injected via __init__.
     """
 
     def __init__(
@@ -53,19 +55,26 @@ class Pipeline:
         self.repair = repair or NoOpRepair()
 
     # ------------------------------------------------------------
-    def _trace_list(self, *stages: StageResult) -> List[dict]:
-        traces = []
+    @staticmethod
+    def _trace_list(*stages: Optional[StageResult]) -> List[dict]:
+        """Collect .trace objects (as dict) from StageResult items if present."""
+        traces: List[dict] = []
         for s in stages:
             if not s:
                 continue
             t = getattr(s, "trace", None)
-            if t:
-                traces.append(t.__dict__)
+            if t is not None:
+                # t is likely a dataclass – expose as plain dict for JSON safety
+                traces.append(getattr(t, "__dict__", t))
         return traces
 
     # ------------------------------------------------------------
-    def _safe_stage(self, fn, **kwargs) -> StageResult:
-        """Run a stage safely; if it throws, catch and convert to StageResult."""
+    @staticmethod
+    def _safe_stage(fn, **kwargs) -> StageResult:
+        """
+        Run a stage safely; if it throws, return a StageResult(ok=False, error=[...]).
+        If fn returns a non-StageResult (e.g., dict), coerce to StageResult(ok=True, data=...).
+        """
         try:
             r = fn(**kwargs)
             if isinstance(r, StageResult):
@@ -74,6 +83,18 @@ class Pipeline:
         except Exception as e:
             tb = traceback.format_exc()
             return StageResult(ok=False, data=None, trace=None, error=[f"{e}", tb])
+
+    # ------------------------------------------------------------
+    @staticmethod
+    def _mk_trace(
+        stage: str, duration_ms: float, notes: Optional[Dict[str, Any]] = None
+    ) -> dict:
+        """Create a normalized trace dict."""
+        return {
+            "stage": stage,
+            "duration_ms": float(duration_ms),
+            "notes": notes or {},
+        }
 
     # ------------------------------------------------------------
     def run(
@@ -88,11 +109,27 @@ class Pipeline:
         sql: Optional[str] = None
         rationale: Optional[str] = None
         verified: Optional[bool] = None
-        schema_preview = schema_preview or ""
 
-        # --- 1) ambiguity detection ---
+        # Normalize inputs
+        schema_preview = schema_preview or ""
+        clarify_answers = clarify_answers or {}
+
+        # --- 1) ambiguity detection (with explicit timing & trace) ---
         try:
+            t0 = time.perf_counter()
             questions = self.detector.detect(user_query, schema_preview)
+            t1 = time.perf_counter()
+            traces.append(
+                self._mk_trace(
+                    "detector",
+                    (t1 - t0) * 1000.0,
+                    {
+                        "ambiguous": bool(questions),
+                        "questions_len": len(questions or []),
+                    },
+                )
+            )
+
             if questions:
                 return FinalResult(
                     ok=True,
@@ -103,9 +140,11 @@ class Pipeline:
                     sql=None,
                     rationale=None,
                     verified=None,
-                    traces=[],
+                    traces=traces,
                 )
         except Exception as e:
+            # detector crash – mark as error but keep trace so far
+            traces.append(self._mk_trace("detector", 0.0, {"error": str(e)}))
             return FinalResult(
                 ok=False,
                 ambiguous=True,
@@ -115,7 +154,7 @@ class Pipeline:
                 sql=None,
                 rationale=None,
                 verified=None,
-                traces=[],
+                traces=traces,
             )
 
         # --- 2) planner ---
@@ -142,7 +181,7 @@ class Pipeline:
             user_query=user_query,
             schema_preview=schema_preview,
             plan_text=(r_plan.data or {}).get("plan"),
-            clarify_answers=clarify_answers or {},
+            clarify_answers=clarify_answers,
         )
         traces.extend(self._trace_list(r_gen))
         if not r_gen.ok:
@@ -183,7 +222,9 @@ class Pipeline:
         )
         traces.extend(self._trace_list(r_exec))
         if not r_exec.ok:
-            details.extend(r_exec.error or [])
+            # executor failure does not hard-fail the pipeline; accumulate details
+            if r_exec.error:
+                details.extend(r_exec.error)
 
         # --- 6) verifier ---
         r_ver = self._safe_stage(
@@ -203,13 +244,17 @@ class Pipeline:
                 )
                 traces.extend(self._trace_list(r_fix))
                 if not r_fix.ok:
+                    # repair failed – stop trying further
                     break
 
-                sql = (r_fix.data or {}).get("sql")
+                # re-run safety → executor → verifier on the fixed SQL
+                sql = (r_fix.data or {}).get("sql", sql)
+
                 r_safe = self._safe_stage(self.safety.run, sql=sql)
                 traces.extend(self._trace_list(r_safe))
                 if not r_safe.ok:
-                    details.extend(r_safe.error or [])
+                    if r_safe.error:
+                        details.extend(r_safe.error)
                     continue
 
                 r_exec = self._safe_stage(
@@ -217,7 +262,8 @@ class Pipeline:
                 )
                 traces.extend(self._trace_list(r_exec))
                 if not r_exec.ok:
-                    details.extend(r_exec.error or [])
+                    if r_exec.error:
+                        details.extend(r_exec.error)
                     continue
 
                 r_ver = self._safe_stage(
@@ -230,19 +276,19 @@ class Pipeline:
 
         # --- 8) fallback: verifier silent but executor succeeded ---
         if (verified is None or not verified) and not details:
-            any_exec = any(
-                t.get("stage") == "executor" and t.get("notes", {}).get("row_count")
+            any_exec_ok = any(
+                t.get("stage") == "executor" and (t.get("notes") or {}).get("row_count")
                 for t in traces
             )
-            if any_exec:
+            if any_exec_ok:
                 traces.append(
-                    {
-                        "stage": "pipeline",
-                        "notes": {
+                    self._mk_trace(
+                        "pipeline",
+                        0.0,
+                        {
                             "auto_fix": "verified=True (executor succeeded, verifier silent)"
                         },
-                        "duration_ms": 0.0,
-                    }
+                    )
                 )
                 verified = True
 
@@ -252,11 +298,11 @@ class Pipeline:
         err = has_errors and not bool(verified)
 
         traces.append(
-            {
-                "stage": "pipeline",
-                "notes": {"final_verified": verified, "details_len": len(details)},
-                "duration_ms": 0.0,
-            }
+            self._mk_trace(
+                "pipeline",
+                0.0,
+                {"final_verified": bool(verified), "details_len": len(details)},
+            )
         )
 
         return FinalResult(

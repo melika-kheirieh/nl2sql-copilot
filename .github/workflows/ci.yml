@@ -42,7 +42,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .ruff_cache
-          key: ruff-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'ruff.toml', '.pre-commit-config.yaml', '**/*.py') }}
+          key: ruff-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'ruff.toml', '.pre-commit-configs.yaml', '**/*.py') }}
 
       - name: ⚙️ Cache Mypy
         uses: actions/cache@v4

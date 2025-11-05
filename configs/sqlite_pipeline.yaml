@@ -1,0 +1,15 @@
+detector: default
+planner: default
+generator: rules
+safety: default
+executor: default
+verifier: basic
+repair: default
+
+adapter:
+  kind: sqlite
+  dsn: data/chinook.db
+
+llm:
+  provider: openai
+  model: gpt-4o-mini
