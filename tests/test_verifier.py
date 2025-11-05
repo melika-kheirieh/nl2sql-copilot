@@ -1,35 +1,75 @@
 from nl2sql.verifier import Verifier
-from nl2sql.types import StageResult, StageTrace
+from nl2sql.types import StageTrace
 
 
-def make_exec_result(ok=True, error=None):
-    return StageResult(
-        ok=ok, data={"dummy": True} if ok else None, trace=None, error=error
-    )
+# --- Tiny fake adapter for preview execution ---------------------------------
+class FakeAdapter:
+    """Mimics adapter.execute_preview(sql) returning dicts with ok/error."""
+
+    def __init__(self, will_ok=True, error=None):
+        self.will_ok = will_ok
+        self.error = error
+
+    def execute_preview(self, sql: str):
+        if self.will_ok:
+            return {"ok": True}
+        if self.error:
+            return {"ok": False, "error": self.error}
+        return {"ok": False}
 
 
-def test_verifier_handles_execution_error():
+# -----------------------------------------------------------------------------
+
+
+def test_verifier_parse_error_is_not_ok():
     v = Verifier()
-    r = v.run(
-        sql="SELECT 1", exec_result=make_exec_result(ok=False, error=["db error"])
-    )
+    fake = FakeAdapter(will_ok=True)
+    r = v.verify("SELCT * FRM broken;", adapter=fake)  # intentionally broken
     assert not r.ok
-    assert "execution_error" in r.trace.notes["reason"]
-    assert r.error == ["db error"]
+    assert r.error and "parse_error" in r.error
 
 
-def test_verifier_detects_agg_without_group():
+def test_verifier_plain_aggregate_without_groupby_is_flagged():
     v = Verifier()
-    sql = "SELECT COUNT(*) FROM users"
-    r = v.run(sql=sql, exec_result=make_exec_result(ok=True))
+    fake = FakeAdapter(will_ok=True)
+    r = v.verify("SELECT COUNT(*), country FROM customers;", adapter=fake)
     assert not r.ok
-    assert any("Aggregation without GROUP BY" in e for e in r.error)
+    assert r.error and "aggregation_without_group_by" in r.error
 
 
-def test_verifier_parses_valid_sql_ok():
+def test_verifier_windowed_aggregate_is_ok_without_groupby():
     v = Verifier()
-    sql = "SELECT COUNT(*), city FROM users GROUP BY city"
-    r = v.run(sql=sql, exec_result=make_exec_result(ok=True))
-    assert r.ok
-    assert r.data == {"verified": True}
+    fake = FakeAdapter(will_ok=True)
+    r = v.verify(
+        "SELECT customer_id, SUM(amount) OVER (PARTITION BY customer_id) AS s FROM payments;",
+        adapter=fake,
+    )
+    assert r.ok, r.error
+
+
+def test_verifier_distinct_projection_is_ok_with_aggregate():
+    v = Verifier()
+    fake = FakeAdapter(will_ok=True)
+    r = v.verify(
+        "SELECT DISTINCT artist_id, COUNT(*) FROM albums;",
+        adapter=fake,
+    )
+    # DISTINCT + aggregate can be valid; avoid false positives.
+    assert r.ok or "aggregation_without_group_by" not in (r.error or [])
+
+
+def test_verifier_exec_error_is_reported():
+    v = Verifier()
+    fake = FakeAdapter(will_ok=False, error="no such table: imaginary_table")
+    r = v.verify("SELECT name FROM imaginary_table;", adapter=fake)
+    assert not r.ok
+    assert any(("exec_error" in e) or ("exec_exception" in e) for e in (r.error or []))
+
+
+def test_verifier_returns_trace_with_int_duration():
+    v = Verifier()
+    fake = FakeAdapter(will_ok=True)
+    r = v.verify("SELECT 1;", adapter=fake)
     assert isinstance(r.trace, StageTrace)
+    # Some implementations store duration as int milliseconds:
+    assert isinstance(r.trace.duration_ms, int)
