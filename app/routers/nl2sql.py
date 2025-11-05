@@ -1,13 +1,18 @@
+from __future__ import annotations
+
+# --- Stdlib ---
 from dataclasses import asdict, is_dataclass
+import json
 import os
 from pathlib import Path
 import time
-import json
 import uuid
-from typing import Union, Optional, Dict, TypedDict, Any, cast, Callable
+from typing import Any, Dict, Optional, TypedDict, Union, Protocol, cast
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+# --- Third-party ---
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Depends
 
+# --- Local ---
 from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
 from nl2sql.pipeline import Pipeline as _Pipeline, FinalResult as _FinalResult
 from nl2sql.ambiguity_detector import AmbiguityDetector
@@ -21,13 +26,11 @@ from adapters.llm.openai_provider import OpenAIProvider
 from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.db.postgres_adapter import PostgresAdapter
 
+
+# Stable public re-exports
 Pipeline = _Pipeline
 FinalResult = _FinalResult
 __all__ = ["Pipeline", "FinalResult"]
-
-
-# Test hook: if set, router will use this callable to run the pipeline
-_RUN: Optional[Callable[..., FinalResult]] = None
 
 router = APIRouter(prefix="/nl2sql")
 
@@ -177,16 +180,38 @@ def _build_pipeline(adapter: Union[PostgresAdapter, SQLiteAdapter]) -> Pipeline:
     )
 
 
-# --- Module-level default Pipeline instance for no-db_id requests ---
-# It lets tests monkeypatch `Pipeline.run` and avoids building adapters on each call.
-try:
-    _pipeline: Pipeline = _build_pipeline(SQLiteAdapter(":memory:"))
-except Exception as e:
-    # Fallback to a file-based sqlite if in-memory init fails in some environments
-    print(
-        f"⚠️ default _pipeline init failed on :memory: → {e}; falling back to data/chinook.db"
-    )
-    _pipeline = _build_pipeline(SQLiteAdapter("data/chinook.db"))
+# -------------------------------
+# Dependency-injected runner
+# -------------------------------
+class Runner(Protocol):
+    def __call__(
+        self, *, user_query: str, schema_preview: str | None = None
+    ) -> FinalResult: ...
+
+
+def get_runner(request: Request) -> Runner:
+    """
+    Returns a callable runner. Preferred path in production:
+    - app.state.pipeline_runner (if set) -> used (e.g., tests or special wiring)
+    - app.state.pipeline -> reuse existing
+    - else build default pipeline lazily and cache
+    """
+    runner: Optional[Runner] = getattr(request.app.state, "pipeline_runner", None)  # type: ignore[attr-defined]
+    if runner:
+        return runner
+
+    pipeline: Optional[Pipeline] = getattr(request.app.state, "pipeline", None)  # type: ignore[attr-defined]
+    if pipeline is None:
+        # Build a default pipeline lazily (no side-effect on import)
+        adapter = _select_adapter(db_id=None)
+        try:
+            pipeline = _build_pipeline(adapter)
+            request.app.state.pipeline = pipeline  # type: ignore[attr-defined]
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Pipeline unavailable: {exc!s}"
+            )
+    return pipeline.run  # type: ignore[return-value]
 
 
 # -------------------------------
@@ -250,37 +275,34 @@ async def upload_db(file: UploadFile = File(...)):
 # Main NL2SQL endpoint
 # -------------------------------
 @router.post("", name="nl2sql_handler")
-def nl2sql_handler(request: NL2SQLRequest):
+def nl2sql_handler(
+    request: NL2SQLRequest,
+    run: Runner = Depends(get_runner),
+):
+    """
+    Handles NL→SQL conversion requests.
+    Uses dependency-injected pipeline runner (get_runner).
+    If db_id provided → builds a temporary per-request pipeline.
+    """
     db_id = getattr(request, "db_id", None)
+    provided_preview: Optional[str] = cast(
+        Optional[str], getattr(request, "schema_preview", None)
+    )
 
-    # Declare once to avoid mypy no-redef
-    pipeline_obj: Pipeline
-    derived_preview_val: str
-
-    if not db_id:
-        # Use module-level pipeline instance (already initialized)
-        pipeline_obj = cast(Pipeline, _pipeline)
-        derived_preview_val = ""
-    else:
+    # Select pipeline (DI default vs per-request)
+    if db_id:
         adapter = _select_adapter(db_id)
-        pipeline_obj = _build_pipeline(adapter)
-        derived_preview_val = (
-            _derive_schema_preview(adapter)
-            if isinstance(adapter, SQLiteAdapter)
-            else ""
-        )
+        pipeline = _build_pipeline(adapter)
+        derived_preview = _derive_schema_preview(adapter)
+        runner: Runner = pipeline.run
+        final_preview = provided_preview or derived_preview or ""
+    else:
+        runner = run
+        final_preview = provided_preview or ""
 
-    # Resolve schema_preview
-    provided_preview_any: Any = getattr(request, "schema_preview", None)
-    provided_preview: Optional[str] = cast(Optional[str], provided_preview_any)
-    final_preview: Optional[str] = provided_preview or (derived_preview_val or None)
-
-    # Run pipeline (ensure schema_preview is str for typing)
+    # Execute safely
     try:
-        result = pipeline_obj.run(
-            user_query=request.query,
-            schema_preview=(final_preview or ""),  # pipeline expects str
-        )
+        result = runner(user_query=request.query, schema_preview=final_preview)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Pipeline crash: {exc!s}")
 
@@ -291,7 +313,7 @@ def nl2sql_handler(request: NL2SQLRequest):
     if result.ambiguous and (result.questions is not None):
         return ClarifyResponse(ambiguous=True, questions=result.questions)
 
-    # Error → 400 (with debug dump)
+    # Error → 400 + dump
     if (not result.ok) or result.error:
         print("❌ Pipeline failure dump:")
         print("  ok:", result.ok)
