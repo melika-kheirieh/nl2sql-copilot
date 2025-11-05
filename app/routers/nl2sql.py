@@ -57,15 +57,8 @@ def get_runner() -> Runner:
 
 def _build_pipeline(adapter) -> Any:
     """Thin wrapper for tests to monkeypatch; builds a pipeline bound to adapter."""
-
     return pipeline_from_config_with_adapter(CONFIG_PATH, adapter=adapter)
 
-
-#
-# # Stable public re-exports
-# Pipeline = _Pipeline
-# FinalResult = _FinalResult
-# __all__ = ["Pipeline", "FinalResult"]
 
 router = APIRouter(prefix="/nl2sql")
 
@@ -148,7 +141,6 @@ _load_db_map()
 # -------------------------------
 # Adapter selection (lazy)
 # -------------------------------
-# ---------- SELECT ADAPTER ----------
 def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapter]:
     """
     Resolve a DB adapter based on module-level DB_MODE and an optional db_id.
@@ -207,66 +199,8 @@ def _get_llm() -> OpenAIProvider:
     return OpenAIProvider()
 
 
-# def _build_pipeline(adapter: Union[PostgresAdapter, SQLiteAdapter]) -> Pipeline:
-#     """
-#     Build a fresh Pipeline bound to the given adapter.
-#     All stateful/external pieces (LLM, executor) are instantiated here (lazy).
-#     """
-#     llm = _get_llm()
-#     detector = AmbiguityDetector()
-#     planner = Planner(llm=llm)
-#     generator = Generator(llm=llm)
-#     safety = Safety()
-#     executor = Executor(adapter)
-#     verifier = Verifier()
-#     repair = Repair(llm=llm)
-#     return Pipeline(
-#         detector=detector,
-#         planner=planner,
-#         generator=generator,
-#         safety=safety,
-#         executor=executor,
-#         verifier=verifier,
-#         repair=repair,
-#     )
-
-
 # -------------------------------
-# Dependency-injected runner
-# -------------------------------
-# class Runner(Protocol):
-#     def __call__(
-#         self, *, user_query: str, schema_preview: str | None = None
-#     ) -> FinalResult: ...
-#
-#
-# def get_runner(request: Request) -> Runner:
-#     """
-#     Returns a callable runner. Preferred path in production:
-#     - app.state.pipeline_runner (if set) -> used (e.g., tests or special wiring)
-#     - app.state.pipeline -> reuse existing
-#     - else build default pipeline lazily and cache
-#     """
-#     runner: Optional[Runner] = getattr(request.app.state, "pipeline_runner", None)  # type: ignore[attr-defined]
-#     if runner:
-#         return runner
-#
-#     pipeline: Optional[Pipeline] = getattr(request.app.state, "pipeline", None)  # type: ignore[attr-defined]
-#     if pipeline is None:
-#         # Build a default pipeline lazily (no side-effect on import)
-#         adapter = _select_adapter(db_id=None)
-#         try:
-#             pipeline = _build_pipeline(adapter)
-#             request.app.state.pipeline = pipeline  # type: ignore[attr-defined]
-#         except Exception as exc:
-#             raise HTTPException(
-#                 status_code=500, detail=f"Pipeline unavailable: {exc!s}"
-#             )
-#     return pipeline.run  # type: ignore[return-value]
-
-
-# -------------------------------
-# Helpers (unchanged)
+# Helpers
 # -------------------------------
 def _to_dict(obj: Any) -> Any:
     if is_dataclass(obj) and not isinstance(obj, type):
@@ -275,29 +209,50 @@ def _to_dict(obj: Any) -> Any:
 
 
 def _round_trace(t: Any) -> Dict[str, Any]:
-    """Normalize a trace entry to a dict and coerce duration_ms to int."""
+    """
+    Normalize a trace entry (dict or StageTrace-like object) for API/UI:
+    - stage: str (required)
+    - duration_ms: int (rounded)
+    - summary: optional (pass-through if exists)
+    - notes: optional
+    - token_in/out, cost_usd: pass-through if present
+    """
     if isinstance(t, dict):
         stage = t.get("stage", "?")
         ms = t.get("duration_ms", 0)
         notes = t.get("notes")
         cost = t.get("cost_usd")
+        summary = t.get("summary")
+        token_in = t.get("token_in")
+        token_out = t.get("token_out")
     else:
         stage = getattr(t, "stage", "?")
         ms = getattr(t, "duration_ms", 0)
         notes = getattr(t, "notes", None)
         cost = getattr(t, "cost_usd", None)
+        summary = getattr(t, "summary", None)
+        token_in = getattr(t, "token_in", None)
+        token_out = getattr(t, "token_out", None)
 
+    # coerce duration to int with rounding
     try:
-        ms_int = int(ms) if ms is not None else 0
+        ms_int = int(round(float(ms))) if ms is not None else 0
     except Exception:
         ms_int = 0
 
-    return {
+    out: Dict[str, Any] = {
         "stage": str(stage) if stage is not None else "?",
         "duration_ms": ms_int,
         "notes": notes,
         "cost_usd": cost,
     }
+    if summary is not None:
+        out["summary"] = summary
+    if token_in is not None:
+        out["token_in"] = token_in
+    if token_out is not None:
+        out["token_out"] = token_out
+    return out
 
 
 # -------------------------------
@@ -391,7 +346,7 @@ def nl2sql_handler(
         message = "; ".join(result.details or []) or "Unknown error"
         raise HTTPException(status_code=400, detail=message)
 
-    # Success path → 200
+    # Success path → 200 (coerce/standardize traces for API)
     traces = [_round_trace(t) for t in (result.traces or [])]
     return NL2SQLResponse(
         ambiguous=False,

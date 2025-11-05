@@ -70,6 +70,61 @@ class Pipeline:
 
     # ------------------------------------------------------------
     @staticmethod
+    def _mk_trace(
+        stage: str,
+        duration_ms: float,
+        summary: str,
+        notes: Optional[Dict[str, Any]] = None,
+    ) -> dict:
+        """Create a normalized trace dict (internal: duration may be float)."""
+        return {
+            "stage": stage,
+            "duration_ms": float(duration_ms),
+            "summary": summary,
+            "notes": notes or {},
+        }
+
+    @staticmethod
+    def _normalize_traces(traces: List[dict]) -> List[dict]:
+        """
+        Normalize trace list for API/UI:
+        - coerce duration_ms to int
+        - ensure `summary` exists (fallback to a minimal one)
+        """
+        norm: List[dict] = []
+        for t in traces:
+            stage = str(t.get("stage", "unknown"))
+            dur = t.get("duration_ms", 0)
+            try:
+                dur_int = int(round(float(dur)))
+            except Exception:
+                dur_int = 0
+            summary = t.get("summary")
+            if not summary:
+                # fallback summary if not provided by stage
+                notes = t.get("notes") or {}
+                failed = bool(notes.get("error") or notes.get("errors"))
+                summary = "failed" if failed else "ok"
+            notes = t.get("notes") or {}
+            # preserve any accounting fields if present (token_in/out, cost_usd, ...)
+            payload = {
+                "stage": stage,
+                "duration_ms": dur_int,
+                "summary": summary,
+                "notes": notes,
+            }
+            # keep extra accounting if exists
+            if "token_in" in t:
+                payload["token_in"] = t["token_in"]
+            if "token_out" in t:
+                payload["token_out"] = t["token_out"]
+            if "cost_usd" in t:
+                payload["cost_usd"] = t["cost_usd"]
+            norm.append(payload)
+        return norm
+
+    # ------------------------------------------------------------
+    @staticmethod
     def _safe_stage(fn, **kwargs) -> StageResult:
         """
         Run a stage safely; if it throws, return a StageResult(ok=False, error=[...]).
@@ -83,18 +138,6 @@ class Pipeline:
         except Exception as e:
             tb = traceback.format_exc()
             return StageResult(ok=False, data=None, trace=None, error=[f"{e}", tb])
-
-    # ------------------------------------------------------------
-    @staticmethod
-    def _mk_trace(
-        stage: str, duration_ms: float, notes: Optional[Dict[str, Any]] = None
-    ) -> dict:
-        """Create a normalized trace dict."""
-        return {
-            "stage": stage,
-            "duration_ms": float(duration_ms),
-            "notes": notes or {},
-        }
 
     # ------------------------------------------------------------
     def run(
@@ -119,12 +162,14 @@ class Pipeline:
             t0 = time.perf_counter()
             questions = self.detector.detect(user_query, schema_preview)
             t1 = time.perf_counter()
+            is_amb = bool(questions)
             traces.append(
                 self._mk_trace(
-                    "detector",
-                    (t1 - t0) * 1000.0,
-                    {
-                        "ambiguous": bool(questions),
+                    stage="detector",
+                    duration_ms=(t1 - t0) * 1000.0,
+                    summary=("ambiguous" if is_amb else "clear"),
+                    notes={
+                        "ambiguous": is_amb,
                         "questions_len": len(questions or []),
                     },
                 )
@@ -140,11 +185,18 @@ class Pipeline:
                     sql=None,
                     rationale=None,
                     verified=None,
-                    traces=traces,
+                    traces=self._normalize_traces(traces),
                 )
         except Exception as e:
             # detector crash – mark as error but keep trace so far
-            traces.append(self._mk_trace("detector", 0.0, {"error": str(e)}))
+            traces.append(
+                self._mk_trace(
+                    stage="detector",
+                    duration_ms=0.0,
+                    summary="failed",
+                    notes={"error": str(e)},
+                )
+            )
             return FinalResult(
                 ok=False,
                 ambiguous=True,
@@ -154,7 +206,7 @@ class Pipeline:
                 sql=None,
                 rationale=None,
                 verified=None,
-                traces=traces,
+                traces=self._normalize_traces(traces),
             )
 
         # --- 2) planner ---
@@ -172,7 +224,7 @@ class Pipeline:
                 sql=None,
                 rationale=None,
                 verified=None,
-                traces=traces,
+                traces=self._normalize_traces(traces),
             )
 
         # --- 3) generator ---
@@ -194,7 +246,7 @@ class Pipeline:
                 sql=None,
                 rationale=None,
                 verified=None,
-                traces=traces,
+                traces=self._normalize_traces(traces),
             )
 
         sql = (r_gen.data or {}).get("sql")
@@ -213,7 +265,7 @@ class Pipeline:
                 sql=sql,
                 rationale=rationale,
                 verified=None,
-                traces=traces,
+                traces=self._normalize_traces(traces),
             )
 
         # --- 5) executor ---
@@ -283,11 +335,10 @@ class Pipeline:
             if any_exec_ok:
                 traces.append(
                     self._mk_trace(
-                        "pipeline",
-                        0.0,
-                        {
-                            "auto_fix": "verified=True (executor succeeded, verifier silent)"
-                        },
+                        stage="pipeline",
+                        duration_ms=0.0,
+                        summary="auto-verified",
+                        notes={"reason": "executor succeeded, verifier silent"},
                     )
                 )
                 verified = True
@@ -299,9 +350,10 @@ class Pipeline:
 
         traces.append(
             self._mk_trace(
-                "pipeline",
-                0.0,
-                {"final_verified": bool(verified), "details_len": len(details)},
+                stage="pipeline",
+                duration_ms=0.0,
+                summary="finalize",
+                notes={"final_verified": bool(verified), "details_len": len(details)},
             )
         )
 
@@ -314,5 +366,5 @@ class Pipeline:
             rationale=rationale,
             verified=verified,
             questions=None,
-            traces=traces,
+            traces=self._normalize_traces(traces),
         )

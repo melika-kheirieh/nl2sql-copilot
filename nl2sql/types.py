@@ -5,7 +5,8 @@ from typing import Any, Dict, Optional, List
 @dataclass(frozen=True)
 class StageTrace:
     stage: str
-    duration_ms: float
+    duration_ms: float  # keep float internally if you like
+    summary: str = ""  # ← default to keep legacy call-sites working
     notes: Optional[Dict[str, Any]] = None
     token_in: Optional[int] = None
     token_out: Optional[int] = None
