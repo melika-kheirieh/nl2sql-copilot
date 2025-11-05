@@ -64,16 +64,51 @@ class Verifier:
         return any(isinstance(n, exp.Window) for n in self._walk(tree))
 
     def _expr_contains_agg(self, node: exp.Expression) -> bool:
-        """True if subtree contains an aggregate call."""
-        # Note: exp.Aggregate doesn't exist in sqlglot, use specific aggregate types
-        AGG_TYPES = (exp.Count, exp.Sum, exp.Avg, exp.Min, exp.Max)
-        # Also check for other aggregate functions that might exist
-        try:
-            AGG_TYPES = AGG_TYPES + (exp.GroupConcat, exp.ArrayAgg, exp.StringAgg)
-        except AttributeError:
-            pass  # Some aggregate types might not exist in all sqlglot versions
+        """True if subtree contains an aggregate call (robust across sqlglot versions)."""
+        # Build aggregate classes dynamically to avoid attr errors and fixed-length tuples
+        agg_type_names = (
+            "Count",
+            "Sum",
+            "Avg",
+            "Min",
+            "Max",
+            "GroupConcat",
+            "ArrayAgg",
+            "StringAgg",
+        )
+        agg_types_list: list[type] = []
+        for name in agg_type_names:
+            t = getattr(exp, name, None)
+            if isinstance(t, type):
+                agg_types_list.append(t)
+        AGG_TYPES: tuple[type, ...] = tuple(agg_types_list)
 
-        return any(isinstance(n, AGG_TYPES) for n in self._walk(node))
+        # 1) Class-based check (if we found any known aggregate classes)
+        if AGG_TYPES and any(isinstance(n, AGG_TYPES) for n in self._walk(node)):
+            return True
+
+        # 2) Fallback: generic function nodes with aggregate names
+        Anonymous = getattr(exp, "Anonymous", None)
+        func_like = (exp.Func,) + ((Anonymous,) if isinstance(Anonymous, type) else ())
+        AGG_NAMES = {"count", "sum", "avg", "min", "max"}
+
+        def _func_name(n: exp.Expression) -> str:
+            name = getattr(n, "name", None)
+            if isinstance(name, str) and name:
+                return name.lower()
+            this = getattr(n, "this", None)
+            if isinstance(this, str):
+                return this.lower()
+            this_name = getattr(this, "name", None)
+            if isinstance(this_name, str) and this_name:
+                return this_name.lower()
+            return (str(this) or "").lower()
+
+        for n in self._walk(node):
+            if isinstance(n, func_like) and _func_name(n) in AGG_NAMES:
+                return True
+
+        return False
 
     def _has_nonagg_column(self, node: exp.Expression) -> bool:
         """Subtree contains a column reference that is NOT inside an aggregate."""
@@ -271,3 +306,6 @@ class Verifier:
             data={"verified": True},
             trace=StageTrace(stage=self.name, duration_ms=_ms(t0)),
         )
+
+    def run(self, *, sql: str, adapter: Any) -> StageResult:
+        return self.verify(sql, adapter=adapter)
