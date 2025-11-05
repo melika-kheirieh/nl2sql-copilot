@@ -79,7 +79,12 @@ def pipeline_from_config(path: str) -> Pipeline:
     if is_pytest:
 
         class _StubDetector:
-            def detect(self, *args, **kwargs) -> StageResult:
+            # Domain method: return list[str]
+            def detect(self, *args, **kwargs) -> list[str]:
+                return []  # no ambiguities
+
+            # Compatibility: return StageResult
+            def run(self, *args, **kwargs) -> StageResult:
                 return StageResult(
                     ok=True,
                     data={"questions": []},
@@ -90,13 +95,15 @@ def pipeline_from_config(path: str) -> Pipeline:
                     },
                 )
 
-            def run(self, *args, **kwargs) -> StageResult:
-                return self.detect(*args, **kwargs)
-
         class _StubPlanner:
             def __init__(self, llm: Any = None) -> None: ...
 
-            def plan(self, *args, **kwargs) -> StageResult:
+            # Domain: return str (plan text)
+            def plan(self, *args, **kwargs) -> str:
+                return "stub plan"
+
+            # Compat: StageResult
+            def run(self, *args, **kwargs) -> StageResult:
                 return StageResult(
                     ok=True,
                     data={"plan": "stub plan"},
@@ -107,68 +114,75 @@ def pipeline_from_config(path: str) -> Pipeline:
                     },
                 )
 
-            def run(self, *args, **kwargs) -> StageResult:
-                return self.plan(*args, **kwargs)
-
         class _StubGenerator:
             def __init__(self, llm: Any = None) -> None: ...
 
-            def generate(self, *args, **kwargs) -> StageResult:
+            # Domain: return tuple[str, str] → (sql, rationale)
+            def generate(self, *args, **kwargs) -> tuple[str, str]:
+                return "SELECT 1;", "stub"
+
+            # Compat: StageResult
+            def run(self, *args, **kwargs) -> StageResult:
+                sql, rationale = self.generate(*args, **kwargs)
                 return StageResult(
                     ok=True,
-                    data={"sql": "SELECT 1;", "rationale": "stub"},
+                    data={"sql": sql, "rationale": rationale},
                     trace={
                         "stage": "generator",
                         "duration_ms": 0,
-                        "notes": {"rationale_len": 4},
+                        "notes": {"rationale_len": len(rationale)},
                     },
                 )
-
-            def run(self, *args, **kwargs) -> StageResult:
-                return self.generate(*args, **kwargs)
 
         class _StubExecutor:
             def __init__(self, db: Any | None = None) -> None: ...
 
-            def execute(self, *args, **kwargs) -> StageResult:
+            # Domain: return dict (execution result)
+            def execute(self, *args, **kwargs) -> Dict[str, Any]:
                 rows = [{"x": 1}]
+                return {"rows": rows, "row_count": len(rows)}
+
+            # Compat: StageResult
+            def run(self, *args, **kwargs) -> StageResult:
+                out = self.execute(*args, **kwargs)
                 return StageResult(
                     ok=True,
-                    data={"rows": rows, "row_count": 1},
+                    data=out,
                     trace={
                         "stage": "executor",
                         "duration_ms": 0,
-                        "notes": {"row_count": 1},
+                        "notes": {"row_count": out["row_count"]},
                     },
                 )
 
-            def run(self, *args, **kwargs) -> StageResult:
-                return self.execute(*args, **kwargs)
-
         class _StubVerifier:
-            def verify(self, *args, **kwargs) -> StageResult:
+            # Domain: return bool
+            def verify(self, *args, **kwargs) -> bool:
+                return True
+
+            # Compat: StageResult
+            def run(self, *args, **kwargs) -> StageResult:
                 return StageResult(
                     ok=True,
                     data={"verified": True},
                     trace={"stage": "verifier", "duration_ms": 0, "notes": None},
                 )
 
-            def run(self, *args, **kwargs) -> StageResult:
-                return self.verify(*args, **kwargs)
-
         class _StubRepair:
             def __init__(self, llm: Any = None) -> None: ...
 
-            def repair(self, *args, **kwargs) -> StageResult:
-                sql = kwargs.get("sql") or "SELECT 1;"
+            # Domain: return str (repaired SQL)
+            def repair(self, *args, **kwargs) -> str:
+                return kwargs.get("sql") or "SELECT 1;"
+
+            # Compat: StageResult
+            def run(self, *args, **kwargs) -> StageResult:
+                sql = self.repair(*args, **kwargs)
                 return StageResult(
                     ok=True,
                     data={"sql": sql},
                     trace={"stage": "repair", "duration_ms": 0, "notes": None},
                 )
-
-            def run(self, *args, **kwargs) -> StageResult:
-                return self.repair(*args, **kwargs)
 
         detector = _StubDetector()
         planner = _StubPlanner()
