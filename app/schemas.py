@@ -13,7 +13,7 @@ class NL2SQLRequest(BaseModel):
 
 class TraceModel(BaseModel):
     stage: str
-    duration_ms: float
+    duration_ms: int
     token_in: int | None = 0
     token_out: int | None = 0
     cost_usd: float | None = 0
