@@ -1,7 +1,7 @@
 from dataclasses import asdict, is_dataclass
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
-from nl2sql.pipeline import Pipeline, FinalResult
+from nl2sql.pipeline import Pipeline as _Pipeline, FinalResult as _FinalResult
 from nl2sql.ambiguity_detector import AmbiguityDetector
 from nl2sql.safety import Safety
 from nl2sql.planner import Planner
@@ -20,7 +20,11 @@ import json
 import uuid
 from typing import Union, Optional, Dict, TypedDict, Any, cast
 
+# Re-export for tests & public API stability (pytest expects nl2sql.Pipeline)
+Pipeline = _Pipeline
+FinalResult = _FinalResult
 __all__ = ["Pipeline", "FinalResult"]
+
 router = APIRouter(prefix="/nl2sql")
 
 # -------------------------------
