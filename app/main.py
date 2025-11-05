@@ -33,7 +33,8 @@ application: FastAPI = FastAPI(
     description="Convert natural language to safe & verified SQL",
 )
 
-application.include_router(nl2sql.router, prefix="/api/v1")
+application.include_router(nl2sql.router, prefix="/api/v1")  # e.g. /api/v1/nl2sql
+application.include_router(nl2sql.router)  # e.g. /nl2sql
 
 # ---- Prometheus metrics ----
 REGISTRY = CollectorRegistry()

@@ -79,7 +79,7 @@ def pipeline_from_config(path: str) -> Pipeline:
     if is_pytest:
         # ---------- full stubs (detector/planner/generator/executor/verifier/repair) ----------
         class _StubDetector:
-            def run(
+            def detect(
                 self, *, user_query: str, schema_preview: Optional[str] = None
             ) -> StageResult:
                 return StageResult(
@@ -92,9 +92,16 @@ def pipeline_from_config(path: str) -> Pipeline:
                     },
                 )
 
+            # compatibility if somewhere calls run():
+            def run(
+                self, *, user_query: str, schema_preview: Optional[str] = None
+            ) -> StageResult:
+                return self.detect(user_query=user_query, schema_preview=schema_preview)
+
         class _StubPlanner:
             def __init__(self, llm: Any = None) -> None: ...
-            def run(
+
+            def plan(
                 self, *, user_query: str, schema_preview: Optional[str] = None
             ) -> StageResult:
                 return StageResult(
@@ -107,9 +114,15 @@ def pipeline_from_config(path: str) -> Pipeline:
                     },
                 )
 
+            def run(
+                self, *, user_query: str, schema_preview: Optional[str] = None
+            ) -> StageResult:
+                return self.plan(user_query=user_query, schema_preview=schema_preview)
+
         class _StubGenerator:
             def __init__(self, llm: Any = None) -> None: ...
-            def run(
+
+            def generate(
                 self,
                 *,
                 user_query: str,
@@ -127,9 +140,13 @@ def pipeline_from_config(path: str) -> Pipeline:
                     },
                 )
 
+            def run(self, **kwargs) -> StageResult:
+                return self.generate(**kwargs)
+
         class _StubExecutor:
             def __init__(self, db: DBAdapter | None = None) -> None: ...
-            def run(self, *, sql: str) -> StageResult:
+
+            def execute(self, *, sql: str) -> StageResult:
                 rows = [{"x": 1}]
                 return StageResult(
                     ok=True,
@@ -141,23 +158,37 @@ def pipeline_from_config(path: str) -> Pipeline:
                     },
                 )
 
+            def run(self, *, sql: str) -> StageResult:
+                return self.execute(sql=sql)
+
         class _StubVerifier:
-            def run(self, *, sql: str, exec_result: Dict[str, Any]) -> StageResult:
+            def verify(self, *, sql: str, exec_result: Dict[str, Any]) -> StageResult:
                 return StageResult(
                     ok=True,
                     data={"verified": True},
                     trace={"stage": "verifier", "duration_ms": 0, "notes": None},
                 )
 
+            def run(self, *, sql: str, exec_result: Dict[str, Any]) -> StageResult:
+                return self.verify(sql=sql, exec_result=exec_result)
+
         class _StubRepair:
             def __init__(self, llm: Any = None) -> None: ...
-            def run(
+
+            def repair(
                 self, *, sql: str, error_msg: str, schema_preview: Optional[str] = None
             ) -> StageResult:
                 return StageResult(
                     ok=True,
                     data={"sql": sql},
                     trace={"stage": "repair", "duration_ms": 0, "notes": None},
+                )
+
+            def run(
+                self, *, sql: str, error_msg: str, schema_preview: Optional[str] = None
+            ) -> StageResult:
+                return self.repair(
+                    sql=sql, error_msg=error_msg, schema_preview=schema_preview
                 )
 
         detector = _StubDetector()
