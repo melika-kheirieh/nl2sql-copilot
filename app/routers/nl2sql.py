@@ -4,7 +4,7 @@ from pathlib import Path
 import time
 import json
 import uuid
-from typing import Union, Optional, Dict, TypedDict, Any, cast
+from typing import Union, Optional, Dict, TypedDict, Any, cast, Callable
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
 
@@ -25,6 +25,9 @@ Pipeline = _Pipeline
 FinalResult = _FinalResult
 __all__ = ["Pipeline", "FinalResult"]
 
+
+# Test hook: if set, router will use this callable to run the pipeline
+_RUN: Optional[Callable[..., FinalResult]] = None
 
 router = APIRouter(prefix="/nl2sql")
 
