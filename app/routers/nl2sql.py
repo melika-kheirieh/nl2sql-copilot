@@ -7,21 +7,14 @@ import os
 from pathlib import Path
 import time
 import uuid
-from typing import Any, Dict, Optional, TypedDict, Union, Protocol, cast, List
+from typing import Any, Dict, Optional, TypedDict, Union, cast, List, Callable
 
 # --- Third-party ---
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 
 # --- Local ---
 from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
 from nl2sql.pipeline import Pipeline as _Pipeline, FinalResult as _FinalResult
-from nl2sql.ambiguity_detector import AmbiguityDetector
-from nl2sql.safety import Safety
-from nl2sql.planner import Planner
-from nl2sql.generator import Generator
-from nl2sql.executor import Executor
-from nl2sql.verifier import Verifier
-from nl2sql.repair import Repair
 from adapters.llm.openai_provider import OpenAIProvider
 from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.db.postgres_adapter import PostgresAdapter
@@ -29,6 +22,21 @@ from nl2sql.pipeline_factory import (
     pipeline_from_config,
     pipeline_from_config_with_adapter,
 )
+
+from nl2sql.pipeline import FinalResult
+
+Runner = Callable[..., FinalResult]
+
+
+def get_runner() -> Runner:
+    """Default runner for dependency injection (can be overridden in tests)."""
+    return _PIPELINE.run
+
+
+def _build_pipeline(adapter) -> Any:
+    """Thin wrapper for tests to monkeypatch; builds a pipeline bound to adapter."""
+
+    return pipeline_from_config_with_adapter(CONFIG_PATH, adapter=adapter)
 
 
 # Stable public re-exports
@@ -58,7 +66,6 @@ UPLOAD_DIR = Path("data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 CONFIG_PATH = os.getenv("PIPELINE_CONFIG", "configs/sqlite_pipeline.yaml")
-# Build a default pipeline once from config; adapter inside the config will be used.
 _PIPELINE = pipeline_from_config(CONFIG_PATH)
 
 
@@ -177,62 +184,62 @@ def _get_llm() -> OpenAIProvider:
     return OpenAIProvider()
 
 
-def _build_pipeline(adapter: Union[PostgresAdapter, SQLiteAdapter]) -> Pipeline:
-    """
-    Build a fresh Pipeline bound to the given adapter.
-    All stateful/external pieces (LLM, executor) are instantiated here (lazy).
-    """
-    llm = _get_llm()
-    detector = AmbiguityDetector()
-    planner = Planner(llm=llm)
-    generator = Generator(llm=llm)
-    safety = Safety()
-    executor = Executor(adapter)
-    verifier = Verifier()
-    repair = Repair(llm=llm)
-    return Pipeline(
-        detector=detector,
-        planner=planner,
-        generator=generator,
-        safety=safety,
-        executor=executor,
-        verifier=verifier,
-        repair=repair,
-    )
+# def _build_pipeline(adapter: Union[PostgresAdapter, SQLiteAdapter]) -> Pipeline:
+#     """
+#     Build a fresh Pipeline bound to the given adapter.
+#     All stateful/external pieces (LLM, executor) are instantiated here (lazy).
+#     """
+#     llm = _get_llm()
+#     detector = AmbiguityDetector()
+#     planner = Planner(llm=llm)
+#     generator = Generator(llm=llm)
+#     safety = Safety()
+#     executor = Executor(adapter)
+#     verifier = Verifier()
+#     repair = Repair(llm=llm)
+#     return Pipeline(
+#         detector=detector,
+#         planner=planner,
+#         generator=generator,
+#         safety=safety,
+#         executor=executor,
+#         verifier=verifier,
+#         repair=repair,
+#     )
 
 
 # -------------------------------
 # Dependency-injected runner
 # -------------------------------
-class Runner(Protocol):
-    def __call__(
-        self, *, user_query: str, schema_preview: str | None = None
-    ) -> FinalResult: ...
-
-
-def get_runner(request: Request) -> Runner:
-    """
-    Returns a callable runner. Preferred path in production:
-    - app.state.pipeline_runner (if set) -> used (e.g., tests or special wiring)
-    - app.state.pipeline -> reuse existing
-    - else build default pipeline lazily and cache
-    """
-    runner: Optional[Runner] = getattr(request.app.state, "pipeline_runner", None)  # type: ignore[attr-defined]
-    if runner:
-        return runner
-
-    pipeline: Optional[Pipeline] = getattr(request.app.state, "pipeline", None)  # type: ignore[attr-defined]
-    if pipeline is None:
-        # Build a default pipeline lazily (no side-effect on import)
-        adapter = _select_adapter(db_id=None)
-        try:
-            pipeline = _build_pipeline(adapter)
-            request.app.state.pipeline = pipeline  # type: ignore[attr-defined]
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500, detail=f"Pipeline unavailable: {exc!s}"
-            )
-    return pipeline.run  # type: ignore[return-value]
+# class Runner(Protocol):
+#     def __call__(
+#         self, *, user_query: str, schema_preview: str | None = None
+#     ) -> FinalResult: ...
+#
+#
+# def get_runner(request: Request) -> Runner:
+#     """
+#     Returns a callable runner. Preferred path in production:
+#     - app.state.pipeline_runner (if set) -> used (e.g., tests or special wiring)
+#     - app.state.pipeline -> reuse existing
+#     - else build default pipeline lazily and cache
+#     """
+#     runner: Optional[Runner] = getattr(request.app.state, "pipeline_runner", None)  # type: ignore[attr-defined]
+#     if runner:
+#         return runner
+#
+#     pipeline: Optional[Pipeline] = getattr(request.app.state, "pipeline", None)  # type: ignore[attr-defined]
+#     if pipeline is None:
+#         # Build a default pipeline lazily (no side-effect on import)
+#         adapter = _select_adapter(db_id=None)
+#         try:
+#             pipeline = _build_pipeline(adapter)
+#             request.app.state.pipeline = pipeline  # type: ignore[attr-defined]
+#         except Exception as exc:
+#             raise HTTPException(
+#                 status_code=500, detail=f"Pipeline unavailable: {exc!s}"
+#             )
+#     return pipeline.run  # type: ignore[return-value]
 
 
 # -------------------------------
@@ -310,10 +317,13 @@ async def upload_db(file: UploadFile = File(...)):
 # Main NL2SQL endpoint
 # -------------------------------
 @router.post("", name="nl2sql_handler")
-def nl2sql_handler(request: NL2SQLRequest):
+def nl2sql_handler(
+    request: NL2SQLRequest,
+    run: Runner = Depends(get_runner),
+):
     """
     NL→SQL handler using YAML-driven DI. If 'db_id' is provided, we override only the adapter
-    while keeping all other stages from the YAML config intact.
+    while keeping all other stages from the YAML configs intact.
     """
     db_id = getattr(request, "db_id", None)
     provided_preview = (
@@ -323,13 +333,12 @@ def nl2sql_handler(request: NL2SQLRequest):
     # Choose runner: default pipeline from YAML OR per-request override with a specific adapter
     if db_id:
         adapter = _select_adapter(db_id)
-        # Build a temporary pipeline from YAML but bind the per-request adapter
-        pipeline = pipeline_from_config_with_adapter(CONFIG_PATH, adapter=adapter)
+        pipeline = _build_pipeline(adapter)
         runner = pipeline.run
         final_preview = provided_preview  # keep simple; derive only if you have a SQLite schema helper
     else:
-        runner = _PIPELINE.run
-        final_preview = provided_preview
+        runner = run
+        final_preview = provided_preview or ""
 
     # Execute pipeline
     try:
@@ -342,8 +351,12 @@ def nl2sql_handler(request: NL2SQLRequest):
         raise HTTPException(status_code=500, detail="Pipeline returned unexpected type")
 
     # Ambiguity path → 200 with questions
-    if result.ambiguous and (result.questions is not None):
-        return ClarifyResponse(ambiguous=True, questions=result.questions)
+    if result.ambiguous:
+        qs = result.questions or []
+        return ClarifyResponse(ambiguous=True, questions=qs)
+
+    if not isinstance(result, _FinalResult):
+        raise HTTPException(status_code=500, detail="Pipeline returned unexpected type")
 
     # Error path → 400 with joined details
     if (not result.ok) or result.error:
