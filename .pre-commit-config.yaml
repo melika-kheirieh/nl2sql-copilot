@@ -36,6 +36,7 @@ repos:
           - --explicit-package-bases
         additional_dependencies:
           - types-requests>=2.32.0.20241016
+          - types-PyYAML>=6.0.12.20240808
         stages: [pre-push]
 
   # --- Pytest: run test suite — push only (no edits) ---
