@@ -108,3 +108,24 @@ clean: ## Remove Python caches
 .PHONY: clean-all
 clean-all: clean ## Remove build artifacts and coverage
 	rm -rf dist build .coverage *.egg-info
+
+# ---------- Metrics ----------
+.PHONY: prom-up prom-check smoke
+
+prom-up:
+	docker compose -f docker-compose.prom.yml up -d
+
+prom-check:
+	@if command -v promtool >/dev/null 2>&1; then \
+		echo "🔍 Running promtool locally..."; \
+		promtool check rules prometheus/rules.yml && promtool check config prometheus/prometheus.yml; \
+	else \
+		echo "⚠️ promtool not found, running via Docker..."; \
+		docker run --rm -v $$(pwd)/prometheus:/etc/prometheus prom/prometheus \
+			promtool check rules /etc/prometheus/rules.yml && \
+		docker run --rm -v $$(pwd)/prometheus:/etc/prometheus prom/prometheus \
+			promtool check config /etc/prometheus/prometheus.yml; \
+	fi
+
+smoke:
+	./scripts/smoke_metrics.sh

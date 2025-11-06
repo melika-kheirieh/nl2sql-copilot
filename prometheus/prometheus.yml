@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Load recording and alerting rules from this file
+rule_files:
+  - rules.yml   # relative to this directory (prometheus/)
+
+scrape_configs:
+  - job_name: "nl2sql-app"
+    static_configs:
+      - targets: ["host.docker.internal:8000"]  # use this if Prometheus runs inside Docker
+        labels:
+          service: "nl2sql"
