@@ -87,9 +87,12 @@ run: ## Run FastAPI app (reload mode)
 	$(UVICORN) app.main:app --reload --host 0.0.0.0 --port $(PORT)
 
 # ---------- Benchmarks ----------
-.PHONY: bench
-bench: ## Run benchmark suite (DummyLLM fallback)
-	$(PY) -m benchmarks.run
+.PHONY: bench bench-chinook
+bench: ## Run legacy demo benchmark (DummyLLM fallback)
+        $(PY) -m benchmarks.run
+
+bench-chinook: ## Run curated Chinook benchmark and write summary artifacts
+        $(PY) -m benchmarks.benchmark_chinook --provider local
 
 # ---------- Docker ----------
 .PHONY: docker-build

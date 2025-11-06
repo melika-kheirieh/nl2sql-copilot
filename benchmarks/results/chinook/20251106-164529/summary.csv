@@ -1,0 +1,9 @@
+id,question,exec_acc,exact_match,structural_match,latency_ms,cost_usd,error
+Q1,list all customers with their country,✅,✅,✅,10.0,0.0,
+Q2,show total invoice amount per billing country,✅,✅,✅,11.22,0.0,
+Q3,show three albums with the highest sales amount,✅,✅,✅,15.59,0.0,
+Q4,artists who released more than one album,✅,✅,✅,12.27,0.0,
+Q5,number of employees per city,✅,✅,✅,6.87,0.0,
+Q6,average invoice total for each customer,✅,✅,✅,10.66,0.0,
+Q7,total quantity of tracks sold by album,✅,✅,✅,12.84,0.0,
+Q8,customers with more than two invoices,✅,✅,✅,12.66,0.0,

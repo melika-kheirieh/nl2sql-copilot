@@ -129,19 +129,41 @@ Before execution, every SQL statement is validated:
 
 ---
 
-## 📊 Benchmark (sample)
+## 📊 Benchmark Results – Chinook Subset
 
-Evaluated on a subset of the [Spider](https://yale-lily.github.io/spider) dataset using `gpt-4o-mini`:
+We ship a reproducible benchmark that mimics Spider-style workloads while
+remaining lightweight enough for local runs. The dataset lives in
+`benchmarks/chinook_subset.py` and `ensure_chinook_subset_db()` builds a tiny
+SQLite copy of Chinook on the fly.
 
-| Query                       | Type          | Correct | Latency (ms) | Model       |
-| --------------------------- | ------------- | ------- | ------------ | ----------- |
-| list all artists            | simple select | ✅       | 118          | gpt-4o-mini |
-| total invoices per country  | aggregation   | ✅       | 127          | gpt-4o-mini |
-| top 3 customers by spending | aggregation   | ✅       | 141          | gpt-4o-mini |
-| albums released before 2000 | filter        | ✅       | 122          | gpt-4o-mini |
-| top 5 sales by genre        | join          | ✅       | 149          | gpt-4o-mini |
+Run it locally (deterministic template LLM):
 
-*(see `benchmarks/results.csv` for detailed results)*
+```bash
+make bench-chinook
+```
+
+Swap to a real model by passing `--provider openai --model <name>` to the
+module.
+
+### Summary (`provider=local`, 8 queries)
+
+| Metric                | Value |
+| --------------------- | ----- |
+| Execution Accuracy    | 100% |
+| Exact Match           | 100% |
+| Structural Match      | 100% |
+| Avg Latency (ms)      | 11.51 |
+| p95 Latency (ms)      | 14.63 |
+| Total Cost (USD)      | 0.00  |
+
+![Latency profile](benchmarks/results/chinook/latest/latency.svg)
+
+Artifacts are written to `benchmarks/results/chinook/latest/`:
+
+* `summary.json` – aggregated metrics
+* `summary.csv` – compact table (per query)
+* `benchmark.jsonl` – raw run logs
+* `latency.svg` – latency vs. execution accuracy chart
 
 ---
 
@@ -189,7 +211,7 @@ mypy .
 * [ ] Add multilingual query support (Persian / English)
 * [ ] Improve self-repair accuracy
 * [ ] Add cost tracking per query
-* [ ] Integrate Prometheus metrics
+* [x] Integrate Prometheus metrics
 
 ---
 

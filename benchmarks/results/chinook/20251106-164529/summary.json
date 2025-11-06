@@ -1,0 +1,12 @@
+{
+  "dataset_size": 8,
+  "provider": "local",
+  "timestamp": "20251106-164529",
+  "exec_accuracy": 1.0,
+  "exact_match": 1.0,
+  "structural_match": 1.0,
+  "avg_latency_ms": 11.5119,
+  "p95_latency_ms": 14.625,
+  "total_cost_usd": 0.0,
+  "avg_cost_usd": 0.0
+}

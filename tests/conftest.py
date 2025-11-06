@@ -1,8 +1,14 @@
 import os
+import sys
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ENV_PATH = os.path.join(ROOT_DIR, ".env")
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+ENV_PATH = ROOT_DIR / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
 
