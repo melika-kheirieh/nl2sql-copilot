@@ -1,0 +1,6 @@
+query,ok,latency_ms
+list all customers,✅,7641
+show total invoices per country,✅,12918
+top 3 albums by total sales,✅,1
+artists with more than 3 albums,❌,11580
+number of employees per city,✅,8164
