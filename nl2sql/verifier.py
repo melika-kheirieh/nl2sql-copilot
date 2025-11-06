@@ -8,6 +8,11 @@ import sqlglot
 from sqlglot import expressions as exp
 
 from nl2sql.types import StageResult, StageTrace
+from nl2sql.metrics import (
+    verifier_checks_total,
+    stage_duration_ms,
+    verifier_failures_total,
+)
 
 
 def _ms(t0: float) -> int:
@@ -182,6 +187,8 @@ class Verifier:
             # Check for common sqlglot error indicators
             # When sqlglot can't parse properly, it often creates Command or Unknown nodes
             if tree_type in ("Command", "Unknown"):
+                verifier_checks_total.labels(ok="false").inc()
+                verifier_failures_total.labels(reason="parse_error").inc()
                 return StageResult(
                     ok=False,
                     error=["parse_error"],
@@ -190,6 +197,8 @@ class Verifier:
 
             # Also check if the tree has errors attribute (some versions of sqlglot)
             if hasattr(tree, "errors") and tree.errors:
+                verifier_checks_total.labels(ok="false").inc()
+                verifier_failures_total.labels(reason="parse_error").inc()
                 return StageResult(
                     ok=False,
                     error=["parse_error"],
@@ -207,6 +216,8 @@ class Verifier:
                     for kw in ["selct", "slect", "selet", "seelct"]
                 ):
                     # Common misspellings of SELECT
+                    verifier_checks_total.labels(ok="false").inc()
+                    verifier_failures_total.labels(reason="parse_error").inc()
                     return StageResult(
                         ok=False,
                         error=["parse_error"],
@@ -214,6 +225,8 @@ class Verifier:
                     )
 
         except Exception:
+            verifier_checks_total.labels(ok="false").inc()
+            verifier_failures_total.labels(reason="parse_error").inc()
             return StageResult(
                 ok=False,
                 error=["parse_error"],
@@ -248,9 +261,11 @@ class Verifier:
                     and any_nonagg_col
                     and not (has_group or has_window or is_distinct)
                 ):
+                    verifier_failures_total.labels(reason="semantic_error").inc()
                     issues.append("aggregation_without_group_by")
         except Exception as e:
             # Don't crash the verifier; surface a soft issue and let fallback run
+            verifier_failures_total.labels(reason="semantic_error").inc()
             issues.append(f"semantic_check_error:{e!s}")
 
         # 3) Fallback textual scan — only if AST didn't already flag
@@ -276,6 +291,9 @@ class Verifier:
                         select_list = m_sel.group("sel")
                         # a comma strongly suggests mixing aggregate and non-aggregate in projection
                         if "," in select_list:
+                            verifier_failures_total.labels(
+                                reason="agg_without_group_by"
+                            ).inc()
                             issues.append("aggregation_without_group_by")
             except Exception:
                 # ignore fallback errors
@@ -287,12 +305,16 @@ class Verifier:
             ok_val = self._extract_ok(exec_result)
             if ok_val is False:
                 err = self._extract_error(exec_result)
+                verifier_failures_total.labels(reason="preview_exec_error").inc()
                 issues.append(f"exec_error:{err}" if err else "exec_error")
         except Exception as e:
+            verifier_failures_total.labels(reason="preview_exec_error").inc()
             issues.append(f"exec_exception:{e!s}")
 
         # 5) Final decision — AFTER all checks (note: no early return before fallback)
         if issues:
+            verifier_checks_total.labels(ok="false").inc()
+            stage_duration_ms.labels("verifier").observe(_ms(t0) / 1.0)
             return StageResult(
                 ok=False,
                 error=issues,
@@ -301,6 +323,8 @@ class Verifier:
                 ),
             )
 
+        verifier_checks_total.labels(ok="true").inc()
+        stage_duration_ms.labels("verifier").observe(_ms(t0) / 1.0)
         return StageResult(
             ok=True,
             data={"verified": True},
