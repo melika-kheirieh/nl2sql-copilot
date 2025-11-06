@@ -7,6 +7,8 @@ from typing import List, Pattern
 import sqlglot
 
 from nl2sql.types import StageResult, StageTrace
+from nl2sql.metrics import safety_blocks_total, stage_duration_ms, safety_checks_total
+
 
 # ------------------------- Zero-width & basic regexes -------------------------
 
@@ -166,12 +168,16 @@ class Safety:
 
         # 0) nil / size guard
         if not sql or not sql.strip():
+            safety_blocks_total.labels(reason="empty_sql").inc()
+            safety_checks_total.labels(ok="false").inc()
             return StageResult(
                 ok=False,
                 error=["empty_sql"],
                 trace=StageTrace(stage=self.name, duration_ms=_ms(t0)),
             )
         if len(sql) > _MAX_SQL_LEN:
+            safety_blocks_total.labels(reason="sql_too_long").inc()
+            safety_checks_total.labels(ok="false").inc()
             return StageResult(
                 ok=False,
                 error=["sql_too_long"],
@@ -185,6 +191,8 @@ class Safety:
         semicolon_count = _count_statements_semicolon(body)
         glot_count = _count_statements_sqlglot(body)
         if semicolon_count != 1 or glot_count != 1:
+            safety_blocks_total.labels(reason="multiple_statements").inc()
+            safety_checks_total.labels(ok="false").inc()
             return StageResult(
                 ok=False,
                 error=["Multiple statements detected"],
@@ -203,6 +211,8 @@ class Safety:
         m = _FORBIDDEN.search(scan_body)
         if m:
             tok = m.group(0).strip().lower()
+            safety_blocks_total.labels(reason="forbidden_keyword").inc()
+            safety_checks_total.labels(ok="false").inc()
             return StageResult(
                 ok=False,
                 error=[f"Forbidden: {tok}"],
@@ -212,6 +222,8 @@ class Safety:
             m2 = rx.search(scan_body)
             if m2:
                 tok = m2.group(0).strip().lower()
+                safety_blocks_total.labels(reason="forbidden_keyword").inc()
+                safety_checks_total.labels(ok="false").inc()
                 return StageResult(
                     ok=False,
                     error=[f"Forbidden: {tok}"],
@@ -223,6 +235,8 @@ class Safety:
             trees = sqlglot.parse(body)
             root = trees[0]
         except Exception as e:
+            safety_blocks_total.labels(reason="parse_error").inc()
+            safety_checks_total.labels(ok="false").inc()
             return StageResult(
                 ok=False,
                 error=["parse_error"],
@@ -241,6 +255,8 @@ class Safety:
                 t2 = sqlglot.parse_one(remainder)
                 t2_type = type(t2).__name__.lower() if t2 else ""
                 if t2_type in {"select", "with"}:
+                    stage_duration_ms.labels("safety").observe(_ms(t0) / 1.0)
+                    safety_checks_total.labels(ok="true").inc()
                     return StageResult(
                         ok=True,
                         data={
@@ -259,6 +275,8 @@ class Safety:
         is_explain = root_type == "explain"
 
         if is_explain and not self.allow_explain:
+            safety_blocks_total.labels(reason="explain_not_allowed").inc()
+            safety_checks_total.labels(ok="false").inc()
             return StageResult(
                 ok=False,
                 error=["EXPLAIN not allowed"],
@@ -266,6 +284,8 @@ class Safety:
             )
 
         if not (is_select_like or (is_explain and self.allow_explain)):
+            safety_blocks_total.labels(reason="non_select").inc()
+            safety_checks_total.labels(ok="false").inc()
             return StageResult(
                 ok=False,
                 error=[f"Non-SELECT statement: {root_type}"],
@@ -273,6 +293,8 @@ class Safety:
             )
 
         # 5) success
+        stage_duration_ms.labels("safety").observe(_ms(t0) / 1.0)
+        safety_checks_total.labels(ok="true").inc()
         return StageResult(
             ok=True,
             data={
