@@ -1,6 +1,0 @@
-query,ok,latency_ms
-list all customers,✅,12
-show total invoices per country,✅,1
-top 3 albums by total sales,✅,1
-artists with more than 3 albums,✅,1
-number of employees per city,✅,1

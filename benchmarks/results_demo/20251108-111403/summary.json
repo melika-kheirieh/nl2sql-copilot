@@ -1,8 +1,0 @@
-{
-  "avg_latency_ms": 3.2,
-  "success_rate": 1.0,
-  "db_path": "/Users/melikakheirieh/Desktop/my/career-developement/LLM/nl2sql-copilot/demo.db",
-  "config": "configs/sqlite_pipeline.yaml",
-  "provider_hint": "STUBS",
-  "timestamp": "2025-11-08 11:14:03"
-}
