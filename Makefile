@@ -109,12 +109,14 @@ clean: ## Remove Python caches
 clean-all: clean ## Remove build artifacts and coverage
 	rm -rf dist build .coverage *.egg-info
 
-# ---------- Metrics ----------
-.PHONY: prom-up prom-check smoke
+# ---------- Observability Stack ----------
+.PHONY: obs-up obs-down obs-logs prom-up prom-check smoke
 
+# Bring up Prometheus + Grafana via Docker Compose
 prom-up:
 	docker compose -f docker-compose.prom.yml up -d
 
+# Validate Prometheus configs (fallback to Docker if promtool is missing)
 prom-check:
 	@if command -v promtool >/dev/null 2>&1; then \
 		echo "🔍 Running promtool locally..."; \
@@ -127,5 +129,93 @@ prom-check:
 			promtool check config /etc/prometheus/prometheus.yml; \
 	fi
 
+# Generate sample traffic and print key metrics snapshot
 smoke:
 	./scripts/smoke_metrics.sh
+
+# Bring up the stack, wait until services are ready, then run smoke
+obs-up:
+	@set -e; \
+	\
+	# 1) Up the stack
+	$(MAKE) prom-up; \
+	\
+	# 2) Wait for Prometheus readiness
+	#    - Tries the /-/ready endpoint (preferred). Falls back to port check.
+	#    - Times out after ~90s.
+	echo "⏳ Waiting for Prometheus (http://localhost:9090) ..."; \
+	for i in $$(seq 1 30); do \
+		# Check readiness endpoint
+		if curl -fsS http://localhost:9090/-/ready >/dev/null 2>&1; then \
+			echo "✅ Prometheus is ready"; \
+			break; \
+		fi; \
+		# Fallback: check TCP port if /-/ready is not enabled
+		if nc -z localhost 9090 >/dev/null 2>&1; then \
+			echo "✅ Prometheus port is open (assuming ready)"; \
+			break; \
+		fi; \
+		sleep 3; \
+		if [ $$i -eq 30 ]; then \
+			echo "❌ Prometheus did not become ready in time"; \
+			exit 1; \
+		fi; \
+	done; \
+	\
+	# 3) Wait for Grafana login page
+	#    - Checks that /login returns HTTP 200/302.
+	echo "⏳ Waiting for Grafana (http://localhost:3000) ..."; \
+	for i in $$(seq 1 30); do \
+		code=$$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/login || true); \
+		if [ "$$code" = "200" ] || [ "$$code" = "302" ]; then \
+			echo "✅ Grafana is up"; \
+			break; \
+		fi; \
+		sleep 3; \
+		if [ $$i -eq 30 ]; then \
+			echo "❌ Grafana did not become ready in time"; \
+			exit 1; \
+		fi; \
+	done; \
+	\
+	# 4) Run smoke to populate metrics
+	echo "🚀 Running smoke traffic ..."; \
+	$(MAKE) smoke; \
+	echo "🎉 Observability stack is live. Open: Prometheus → http://localhost:9090 , Grafana → http://localhost:3000"
+    # 5) Auto-import Grafana dashboard
+	$(MAKE) grafana-import
+
+# Tear down the observability stack
+obs-down:
+	docker compose -f docker-compose.prom.yml down
+
+# Tail logs of both services
+obs-logs:
+	docker compose -f docker-compose.prom.yml logs -f
+
+# ---------- Grafana Auto Import ----------
+.PHONY: grafana-import
+
+# Import dashboard JSON into Grafana via HTTP API
+grafana-import:
+	@set -e; \
+	echo "⏳ Waiting for Grafana API to become ready..."; \
+	for i in $$(seq 1 30); do \
+		code=$$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/health || true); \
+		if [ "$$code" = "200" ]; then \
+			echo "✅ Grafana API is ready"; \
+			break; \
+		fi; \
+		sleep 3; \
+		if [ $$i -eq 30 ]; then \
+			echo "❌ Grafana API did not become ready in time"; \
+			exit 1; \
+		fi; \
+	done; \
+	\
+	echo "📦 Importing dashboard ..."; \
+	curl -s -X POST http://admin:admin@localhost:3000/api/dashboards/db \
+		-H "Content-Type: application/json" \
+		-d "{\"dashboard\": $$(cat prometheus/grafana_dashboard.json), \"overwrite\": true, \"folderId\": 0}" \
+		| jq -r '.status' || true; \
+	echo "🎉 Dashboard imported → http://localhost:3000/dashboards"

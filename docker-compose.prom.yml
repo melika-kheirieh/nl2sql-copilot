@@ -1,4 +1,5 @@
 version: "3.8"
+
 services:
   prometheus:
     image: prom/prometheus:v2.55.0
@@ -9,5 +10,32 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
     ports:
-      - "9090:9090"
+      - "9090:9090"          # Prometheus UI
+    networks:
+      - observability
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: nl2sql-grafana
+    ports:
+      - "3000:3000"          # Grafana UI
+    depends_on:
+      - prometheus
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      # Optional hardening:
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/provisioning/dashboards/nl2sql.json
+    volumes:
+      # Provisioning (datasource + dashboard providers)
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+
+      # The actual dashboard JSON (mounted into the same dashboards dir)
+      - ./prometheus/grafana_dashboard.json:/etc/grafana/provisioning/dashboards/nl2sql.json:ro
+    networks:
+      - observability
     restart: unless-stopped
