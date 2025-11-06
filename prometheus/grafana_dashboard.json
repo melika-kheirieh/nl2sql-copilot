@@ -1,0 +1,68 @@
+{
+  "title": "NL2SQL Copilot - Observability",
+  "editable": true,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Stage p95 Latency (ms)",
+      "targets": [
+        {
+          "expr": "nl2sql:stage_p95_ms",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "milliseconds",
+          "decimals": 0
+        }
+      },
+      "id": 1
+    },
+    {
+      "type": "timeseries",
+      "title": "Pipeline Success Ratio",
+      "targets": [
+        {
+          "expr": "nl2sql:pipeline_success_ratio",
+          "legendFormat": "success ratio",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "decimals": 2
+        }
+      },
+      "id": 2
+    },
+    {
+      "type": "timeseries",
+      "title": "Safety & Verifier Events",
+      "targets": [
+        {
+          "expr": "rate(safety_blocks_total[5m])",
+          "legendFormat": "safety blocks/min",
+          "refId": "C"
+        },
+        {
+          "expr": "rate(verifier_failures_total[5m])",
+          "legendFormat": "verifier failures/min",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0
+        }
+      },
+      "id": 3
+    }
+  ],
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s"
+}
