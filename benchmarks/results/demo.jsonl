@@ -1,3 +1,0 @@
-{"query": "show all users", "exec_acc": 0.0, "safe_fail": 0.0, "latency_ms": 0.610041999607347, "cost_usd": 0.0, "repair_attempts": 0, "provider": "dummy-llm"}
-{"query": "top spenders", "exec_acc": 0.0, "safe_fail": 0.0, "latency_ms": 0.005625000085274223, "cost_usd": 0.0, "repair_attempts": 0, "provider": "dummy-llm"}
-{"query": "sum of spend", "exec_acc": 0.0, "safe_fail": 0.0, "latency_ms": 0.20833300004596822, "cost_usd": 0.0, "repair_attempts": 0, "provider": "dummy-llm"}

@@ -1,0 +1,13 @@
+{
+  "mode": "single-db",
+  "db_path": "/Users/melikakheirieh/Desktop/my/career-developement/LLM/nl2sql-copilot/demo.db",
+  "config": "/Users/melikakheirieh/Desktop/my/career-developement/LLM/nl2sql-copilot/configs/sqlite_pipeline.yaml",
+  "provider_hint": "REAL",
+  "total": 5,
+  "EM": 0.0,
+  "SM": 0.0,
+  "ExecAcc": 0.0,
+  "success_rate": 0.6,
+  "avg_latency_ms": 8551.4,
+  "timestamp": "2025-11-08 12:32:47"
+}
