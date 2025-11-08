@@ -4,6 +4,13 @@ import os
 from typing import Any, Dict, Optional, cast
 import yaml  # type: ignore[import-untyped]
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:
+    pass
+
 from nl2sql.pipeline import Pipeline
 from nl2sql.registry import (
     DETECTORS,
