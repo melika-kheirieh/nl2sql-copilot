@@ -66,31 +66,43 @@ def extract_clean_sql(text: str | None) -> str:
 
 
 def normalize_sql(sql: str) -> str:
-    """Light normalization to make EM stricter-but-fair."""
+    """
+    Conservative normalization for exact-match (EM):
+    - Trim, collapse spaces, drop trailing ';'
+    - Drop trailing 'LIMIT n'
+    - Remove table prefixes only in single-table, no-join queries
+    - Unquote identifiers like `name` or "name"
+    - Uppercase common SQL keywords (string literals unaffected)
+    """
     if not sql:
         return ""
     s = sql.strip()
-    # unify case but keep literals recognizable
-    s = re.sub(r"\s+", " ", s).strip()
-    s = s.rstrip(";")
 
-    # drop table prefixes a.b -> b
-    s = re.sub(r"\b\w+\.(\w+)\b", r"\1", s)
+    # Collapse whitespace early and drop trailing ';'
+    s = re.sub(r"\s+", " ", s).strip().rstrip(";")
 
-    # collapse quotes around identifiers
+    # Drop trailing LIMIT n
+    s = re.sub(r"(?i)\s+LIMIT\s+\d+\s*$", "", s)
+
+    # Remove table prefixes only if single FROM and no JOIN
+    lower = s.lower()
+    if lower.count(" from ") == 1 and " join " not in lower:
+        m = re.search(r"(?i)\bfrom\s+([a-z_][a-z0-9_]*)", s, flags=re.IGNORECASE)
+        if m:
+            table = m.group(1)
+            s = re.sub(rf"\b{re.escape(table)}\.(\w+)\b", r"\1", s)
+
+    # Unquote identifiers: `foo` -> foo, "foo" -> foo (strings '...' remain)
     s = re.sub(r"`([A-Za-z_]\w*)`", r"\1", s)
     s = re.sub(r'"([A-Za-z_]\w*)"', r"\1", s)
 
-    # COUNT(foo) -> COUNT(*), DISTINCT inside COUNT -> COUNT(*)
-    s = re.sub(r"(?i)COUNT\s*\(\s*DISTINCT\s+[^)]+\)", "COUNT(*)", s)
-    s = re.sub(r"(?i)COUNT\s*\(\s*[A-Za-z_]\w*\s*\)", "COUNT(*)", s)
+    # Normalize comma spacing: "a ,  b" -> "a, b"
+    s = re.sub(r"\s*,\s*", ", ", s)
 
-    # strip trailing LIMIT n
-    s = re.sub(r"(?i)\s+LIMIT\s+\d+\s*$", "", s)
-
-    # canonical whitespace + upper keywords for stability
+    # Final whitespace collapse
     s = re.sub(r"\s+", " ", s).strip()
-    # keyword upper (a bit heuristic)
+
+    # Uppercase common keywords (word-boundary safe)
     for kw in [
         "select",
         "from",
@@ -107,6 +119,7 @@ def normalize_sql(sql: str) -> str:
         "desc",
     ]:
         s = re.sub(rf"(?i)\b{kw}\b", kw.upper(), s)
+
     return s
 
 
