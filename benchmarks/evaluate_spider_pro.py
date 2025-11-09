@@ -1,7 +1,9 @@
-#!/usr/bin/env python3
 """
-Enhanced Spider benchmark evaluator for NL2SQL pipeline.
-No external dependencies - uses internal evaluation logic.
+Spider benchmark evaluator (pro):
+- Computes EM / SM / ExecAcc vs. gold SQL
+- Records per-sample latency and (if present) per-stage timings from pipeline traces
+- Persists eval.jsonl (per-sample), summary.json (aggregates incl. p50/p95, per-stage means), results.csv
+- No external deps; percentile and normalization are implemented locally.
 """
 
 from __future__ import annotations
@@ -20,238 +22,244 @@ from nl2sql.pipeline_factory import pipeline_from_config_with_adapter
 from adapters.db.sqlite_adapter import SQLiteAdapter
 from benchmarks.spider_loader import load_spider_sqlite
 
-# ==================== Configuration ====================
+# -------------------------- Config --------------------------
 
 RESULT_ROOT = Path("benchmarks/results_pro")
 TIMESTAMP = time.strftime("%Y%m%d-%H%M%S")
 RESULT_DIR = RESULT_ROOT / TIMESTAMP
+STAGES = [
+    "detector",
+    "planner",
+    "generator",
+    "safety",
+    "executor",
+    "verifier",
+    "repair",
+]
 
-
-# ==================== SQL Processing ====================
+# -------------------------- SQL utils -----------------------
 
 
 def extract_clean_sql(text: str | None) -> str:
-    """Safely extract a clean SQL string from input text possibly containing markdown fences or JSON."""
-    # Always initialize variable to empty string
-    sql = text or ""
+    """Extract a clean SQL string from LLM-ish output (may include fences/JSON)."""
+    sql = (text or "").strip()
 
-    # Remove markdown code fences
-    sql = re.sub(r"```(?:sql)?\s*\n?", "", sql, flags=re.IGNORECASE)
-    sql = re.sub(r"```\s*$", "", sql)
+    # strip ```sql fences
+    sql = re.sub(r"```(?:sql)?\s*", "", sql, flags=re.I)
+    sql = sql.replace("```", "")
 
-    # Try JSON pattern like {"sql": "..."}
-    m_json = re.search(r'"sql"\s*:\s*"([^"]+)"', sql)
-    if m_json:
-        sql = m_json.group(1)
+    # JSON-like {"sql": "..."}
+    m = re.search(r'"sql"\s*:\s*"([^"]+)"', sql)
+    if m:
+        sql = m.group(1)
 
-    # Clean escaped characters
+    # unescape
     sql = sql.replace('\\"', '"').replace("\\n", " ").replace("\\t", " ")
 
-    # Try to locate SQL statement keywords
-    m_sql = re.search(
-        r"\b(select|with|insert|update|delete)\b[\s\S]+", sql, re.IGNORECASE
-    )
-    if m_sql:
-        sql = m_sql.group(0)
+    # find first SQL-ish keyword
+    m2 = re.search(r"\b(select|with|insert|update|delete)\b[\s\S]+", sql, re.I)
+    if m2:
+        sql = m2.group(0)
+
     sql = re.sub(r"\s+", " ", sql).strip().rstrip(";")
     return sql
 
 
 def normalize_sql(sql: str) -> str:
-    """Enhanced SQL normalization for better matching."""
+    """Light normalization to make EM stricter-but-fair."""
     if not sql:
         return ""
+    s = sql.strip()
+    # unify case but keep literals recognizable
+    s = re.sub(r"\s+", " ", s).strip()
+    s = s.rstrip(";")
 
-    sql = sql.strip().upper()
-    # Remove all whitespace variations
-    sql = re.sub(r"\s+", " ", sql)
-    # Remove trailing semicolon
-    sql = sql.rstrip(";")
+    # drop table prefixes a.b -> b
+    s = re.sub(r"\b\w+\.(\w+)\b", r"\1", s)
 
-    # Remove table prefixes (e.g., singer.name -> name)
-    sql = re.sub(r"\b\w+\.(\w+)\b", r"\1", sql)
+    # collapse quotes around identifiers
+    s = re.sub(r"`([A-Za-z_]\w*)`", r"\1", s)
+    s = re.sub(r'"([A-Za-z_]\w*)"', r"\1", s)
 
-    # Remove AS aliases
-    sql = re.sub(r"\s+AS\s+\w+", "", sql, flags=re.IGNORECASE)
+    # COUNT(foo) -> COUNT(*), DISTINCT inside COUNT -> COUNT(*)
+    s = re.sub(r"(?i)COUNT\s*\(\s*DISTINCT\s+[^)]+\)", "COUNT(*)", s)
+    s = re.sub(r"(?i)COUNT\s*\(\s*[A-Za-z_]\w*\s*\)", "COUNT(*)", s)
 
-    # Remove DISTINCT if used with COUNT(*)
-    sql = re.sub(r"COUNT\s*\(\s*DISTINCT\s+", "COUNT(", sql)
+    # strip trailing LIMIT n
+    s = re.sub(r"(?i)\s+LIMIT\s+\d+\s*$", "", s)
 
-    # Normalize COUNT variations
-    sql = re.sub(r"COUNT\s*\(\s*\w+\s*\)", "COUNT(*)", sql)
+    # canonical whitespace + upper keywords for stability
+    s = re.sub(r"\s+", " ", s).strip()
+    # keyword upper (a bit heuristic)
+    for kw in [
+        "select",
+        "from",
+        "where",
+        "group by",
+        "order by",
+        "having",
+        "limit",
+        "join",
+        "on",
+        "and",
+        "or",
+        "asc",
+        "desc",
+    ]:
+        s = re.sub(rf"(?i)\b{kw}\b", kw.upper(), s)
+    return s
 
-    # Remove LIMIT at end
-    sql = re.sub(r"\s+LIMIT\s+\d+$", "", sql)
 
-    # Normalize quotes
-    sql = re.sub(r'"(\w+)"', r"\1", sql)
-    sql = re.sub(r"`(\w+)`", r"\1", sql)
-
-    return sql
-
-
-# ==================== Schema Extraction ====================
+# ---------------------- Schema extraction -------------------
 
 
 def get_database_schema(db_path: Path) -> Dict[str, Any]:
-    """Extract complete schema from SQLite database."""
+    """Extract schema from SQLite database (tables, columns, FKs)."""
+    schema: Dict[str, Any] = {"tables": {}}
     if not db_path.exists():
-        return {}
+        return schema
 
     conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-
-    schema: dict[str, Any] = {"tables": {}}
-
+    cur = conn.cursor()
     try:
-        # Get all tables
-        cursor.execute(
+        cur.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         )
-        tables = cursor.fetchall()
-
-        for (table_name,) in tables:
-            # Get columns
-            cursor.execute(f"PRAGMA table_info('{table_name}')")
-            columns = cursor.fetchall()
-
-            col_info = []
-            for col in columns:
-                col_name = col[1]
-                col_type = col[2]
-                is_pk = col[5]
-
-                col_dict = {
-                    "name": col_name,
-                    "type": col_type,
-                    "primary_key": bool(is_pk),
-                }
-                col_info.append(col_dict)
-
-            # Get foreign keys
-            cursor.execute(f"PRAGMA foreign_key_list('{table_name}')")
-            fks = cursor.fetchall()
-
-            fk_info = []
-            for fk in fks:
-                fk_info.append(
-                    {
-                        "column": fk[3],
-                        "referenced_table": fk[2],
-                        "referenced_column": fk[4],
-                    }
-                )
-
-            schema["tables"][table_name] = {
-                "columns": col_info,
-                "foreign_keys": fk_info,
-            }
-
+        for (table,) in cur.fetchall():
+            cur.execute(f"PRAGMA table_info('{table}')")
+            cols = [
+                {"name": c[1], "type": c[2], "primary_key": bool(c[5])}
+                for c in cur.fetchall()
+            ]
+            cur.execute(f"PRAGMA foreign_key_list('{table}')")
+            fks = [
+                {"column": fk[3], "referenced_table": fk[2], "referenced_column": fk[4]}
+                for fk in cur.fetchall()
+            ]
+            schema["tables"][table] = {"columns": cols, "foreign_keys": fks}
     finally:
         conn.close()
-
     return schema
 
 
 def format_schema_for_prompt(schema: Dict[str, Any]) -> str:
-    """Format schema for LLM prompt."""
-    if not schema or not schema.get("tables"):
+    """Plain-text schema for prompt (minimal but helpful)."""
+    if not schema.get("tables"):
         return ""
-
-    lines = []
-    for table_name, table_info in schema["tables"].items():
-        cols = []
-        for col in table_info["columns"]:
-            col_str = f"{col['name']} {col['type']}"
-            if col.get("primary_key"):
-                col_str += " PRIMARY KEY"
-            cols.append(col_str)
-
-        lines.append(f"Table: {table_name}")
+    lines: List[str] = []
+    for t, info in schema["tables"].items():
+        cols = [
+            f"{c['name']} {c['type']}{' PK' if c.get('primary_key') else ''}"
+            for c in info.get("columns", [])
+        ]
+        lines.append(f"Table: {t}")
         lines.append(f"Columns: {', '.join(cols)}")
-
-        if table_info.get("foreign_keys"):
-            fks = []
-            for fk in table_info["foreign_keys"]:
-                fks.append(
+        fks = info.get("foreign_keys") or []
+        if fks:
+            lines.append(
+                "FKs: "
+                + ", ".join(
                     f"{fk['column']} -> {fk['referenced_table']}.{fk['referenced_column']}"
+                    for fk in fks
                 )
-            lines.append(f"Foreign Keys: {', '.join(fks)}")
-
-        lines.append("")  # Empty line between tables
-
+            )
+        lines.append("")
     return "\n".join(lines).strip()
 
 
-# ==================== SQL Evaluation ====================
+# ---------------------- Exec/eval metrics -------------------
 
 
-def execute_sql(db_path: Path, sql: str) -> Tuple[bool, List[Tuple]]:
-    """Execute SQL and return success flag and results."""
+def _exec_sql(db: Path, sql: str) -> Tuple[bool, List[Tuple]]:
     if not sql:
         return False, []
-
     try:
-        conn = sqlite3.connect(str(db_path))
-        cursor = conn.cursor()
-        cursor.execute(sql)
-        results = cursor.fetchall()
+        conn = sqlite3.connect(str(db))
+        cur = conn.cursor()
+        cur.execute(sql)
+        rows = cur.fetchall()
         conn.close()
-        return True, results
+        return True, rows
     except Exception:
         return False, []
 
 
-def compare_sql_results(gold_results: List[Tuple], pred_results: List[Tuple]) -> bool:
-    """Compare SQL execution results."""
-    if len(gold_results) != len(pred_results):
-        return False
-
-    # Convert to sets for comparison (order independent)
-    gold_set = set(gold_results)
-    pred_set = set(pred_results)
-
-    return gold_set == pred_set
+def _same_rows(a: List[Tuple], b: List[Tuple]) -> bool:
+    return set(a) == set(b) and len(a) == len(b)
 
 
-def evaluate_sql_match(pred_sql: str, gold_sql: str, db_path: Path) -> Dict[str, float]:
-    """Evaluate predicted SQL against gold SQL."""
-    metrics = {"exact_match": 0.0, "set_match": 0.0, "exec_accuracy": 0.0}
+def evaluate_sql(pred: str, gold: str, db: Path) -> Dict[str, float]:
+    """Return {'em', 'sm', 'exec'} in {0.0,1.0} (sm ~ set-match)."""
+    em = 1.0 if normalize_sql(pred) == normalize_sql(gold) else 0.0
 
-    if not pred_sql:
-        return metrics
+    gold_ok, gold_rows = _exec_sql(db, gold)
+    pred_ok, pred_rows = _exec_sql(db, pred)
 
-    # Exact match
-    if normalize_sql(pred_sql) == normalize_sql(gold_sql):
-        metrics["exact_match"] = 1.0
-
-    # Execution-based evaluation
-    gold_success, gold_results = execute_sql(db_path, gold_sql)
-    pred_success, pred_results = execute_sql(db_path, pred_sql)
-
-    if gold_success and pred_success:
-        # Set match (results match)
-        if compare_sql_results(gold_results, pred_results):
-            metrics["set_match"] = 1.0
-            metrics["exec_accuracy"] = 1.0
+    sm = 0.0
+    exec_acc = 0.0
+    if gold_ok and pred_ok:
+        if _same_rows(gold_rows, pred_rows):
+            sm = 1.0
+            exec_acc = 1.0
         else:
-            # Partial credit for successful execution
-            metrics["exec_accuracy"] = 0.5
-
-    return metrics
+            exec_acc = 0.5  # partial credit for executing but mismatched rows
+    return {"em": em, "sm": sm, "exec": exec_acc}
 
 
-# ==================== Pipeline Runner ====================
+# ---------------------- Dataclass + runner ------------------
 
 
 @dataclass
 class SpiderSample:
-    """Spider dataset sample."""
-
     question: str
     db_id: str
     db_path: Path
     gold_sql: str
+
+
+def _percentile(values: List[float], p: float) -> float:
+    """Compute p-th percentile (0..100) without numpy."""
+    if not values:
+        return 0.0
+    vals = sorted(values)
+    k = (len(vals) - 1) * (p / 100.0)
+    f = int(k)
+    c = min(f + 1, len(vals) - 1)
+    if f == c:
+        return float(vals[int(k)])
+    return float(vals[f] * (c - k) + vals[c] * (k - f))
+
+
+def _stage_ms_from_trace(trace_item: Dict[str, Any]) -> float:
+    """Accepts {'stage':..., 'ms':...} OR {'stage':..., 'duration_ms':...}."""
+    if not trace_item:
+        return 0.0
+    if "ms" in trace_item:
+        try:
+            return float(trace_item["ms"])
+        except Exception:
+            return 0.0
+    if "duration_ms" in trace_item:
+        try:
+            return float(trace_item["duration_ms"])
+        except Exception:
+            return 0.0
+    return 0.0
+
+
+def _collect_stage_means(eval_rows: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Average per-stage ms across all records (0 if absent)."""
+    totals = {s: 0.0 for s in STAGES}
+    counts = {s: 0 for s in STAGES}
+    for r in eval_rows:
+        trace_list = r.get("trace") or r.get("traces") or []
+        for t in trace_list:
+            s = t.get("stage")
+            if s in totals:
+                ms = _stage_ms_from_trace(t)
+                totals[s] += ms
+                counts[s] += 1
+    return {s: round(totals[s] / counts[s], 2) if counts[s] else 0.0 for s in STAGES}
 
 
 def run_pipeline_on_sample(
@@ -260,183 +268,172 @@ def run_pipeline_on_sample(
     schema_cache: Dict[str, str],
     debug: bool = False,
 ) -> Dict[str, Any]:
-    """Run NL2SQL pipeline on a single sample."""
-
-    # Get/cache schema
+    """Run pipeline on one sample and extract normalized prediction + traces."""
+    # cache schema
     if sample.db_id not in schema_cache:
         schema_dict = get_database_schema(sample.db_path)
-        schema_str = format_schema_for_prompt(schema_dict)
-        schema_cache[sample.db_id] = schema_str
+        schema_cache[sample.db_id] = format_schema_for_prompt(schema_dict)
         if debug:
-            print(f"    [schema] Loaded {len(schema_str)} chars for {sample.db_id}")
+            print(
+                f"    [schema] Loaded {len(schema_cache[sample.db_id])} chars for {sample.db_id}"
+            )
 
-    schema: str = schema_cache[sample.db_id]
+    schema = schema_cache[sample.db_id]
 
-    # Run pipeline
     try:
-        result = pipeline.run(user_query=sample.question, schema_preview=schema)
-
-        # Extract SQL from result
-        if hasattr(result, "sql") and result.sql:
-            pred_sql = extract_clean_sql(result.sql)
+        res = pipeline.run(user_query=sample.question, schema_preview=schema)
+        # extract SQL
+        pred_sql = ""
+        if hasattr(res, "sql") and res.sql:
+            pred_sql = extract_clean_sql(res.sql)
         else:
-            # Try to extract from various fields
-            for attr in ["final_sql", "generated_sql", "answer"]:
-                if hasattr(result, attr):
-                    val = getattr(result, attr)
-                    if val:
-                        pred_sql = extract_clean_sql(str(val))
-                        if pred_sql:
-                            break
-            else:
-                pred_sql = ""
-
+            for attr in ("final_sql", "generated_sql", "answer"):
+                if getattr(res, attr, None):
+                    pred_sql = extract_clean_sql(str(getattr(res, attr)))
+                    if pred_sql:
+                        break
         return {
-            "ok": bool(getattr(result, "ok", True)),
+            "ok": bool(getattr(res, "ok", True)),
             "sql": pred_sql,
-            "raw_response": getattr(result, "sql", ""),
-            "traces": getattr(result, "traces", []),
+            "trace": getattr(res, "traces", []) or getattr(res, "trace", []),
             "error": None,
         }
-
     except Exception as e:
         if debug:
             import traceback
 
             traceback.print_exc()
-        return {
-            "ok": False,
-            "sql": "",
-            "raw_response": "",
-            "traces": [],
-            "error": str(e),
-        }
+        return {"ok": False, "sql": "", "trace": [], "error": str(e)}
 
 
-# ==================== Main Evaluation ====================
+# --------------------------- Main --------------------------
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Evaluate NL2SQL on Spider")
-    parser.add_argument("--spider", action="store_true", help="Run Spider evaluation")
-    parser.add_argument("--split", default="dev", choices=["dev", "train"])
-    parser.add_argument("--limit", type=int, help="Limit number of samples")
-    parser.add_argument("--debug", action="store_true", help="Enable debug output")
-    parser.add_argument("--config", default="configs/sqlite_pipeline.yaml")
-
-    args = parser.parse_args()
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Evaluate NL2SQL on Spider (pro)")
+    ap.add_argument("--spider", action="store_true", help="Use Spider dataset loader")
+    ap.add_argument("--split", default="dev", choices=["dev", "train"])
+    ap.add_argument("--limit", type=int, default=20)
+    ap.add_argument("--debug", action="store_true")
+    ap.add_argument("--config", default="configs/sqlite_pipeline.yaml")
+    args = ap.parse_args()
 
     if not args.spider:
-        print("Please use --spider flag to run Spider evaluation")
+        print("Use --spider to run Spider evaluation.")
         return
 
-    # Load Spider samples
+    # load items
     print(f"Loading Spider {args.split} split...")
-    samples = load_spider_sqlite(split=args.split, limit=args.limit)
-
-    if not samples:
-        print("❌ No samples loaded. Check SPIDER_ROOT environment variable.")
+    items = load_spider_sqlite(split=args.split, limit=args.limit)
+    if not items:
+        print("❌ No samples loaded. Check SPIDER_ROOT.")
         return
+    print(f"✔ Loaded {len(items)} samples")
 
-    print(f"✔ Loaded {len(samples)} samples")
-
-    # Prepare results directory
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
+    schema_cache: Dict[str, str] = {}
+    eval_rows: List[Dict[str, Any]] = []
 
-    # Initialize schema cache
-    schema_cache = {}
-
-    # Process each sample
-    results = []
-    for i, spider_item in enumerate(samples, 1):
-        # Convert to our sample format
+    for i, it in enumerate(items, 1):
         sample = SpiderSample(
-            question=spider_item.question,
-            db_id=spider_item.db_id,
-            db_path=Path(spider_item.db_path),
-            gold_sql=spider_item.gold_sql,
+            question=it.question,
+            db_id=it.db_id,
+            db_path=Path(it.db_path),
+            gold_sql=it.gold_sql,
         )
+        print(f"\n🧠 [{i}/{len(items)}] [{sample.db_id}] {sample.question}")
 
-        print(f"\n🧠 [{i}/{len(samples)}] [{sample.db_id}] {sample.question}")
-
-        # Create adapter and pipeline for this database
-        adapter = SQLiteAdapter(sample.db_path)
+        adapter = SQLiteAdapter(str(sample.db_path))
         pipeline = pipeline_from_config_with_adapter(args.config, adapter=adapter)
 
-        # Run pipeline
         t0 = time.perf_counter()
-        result = run_pipeline_on_sample(pipeline, sample, schema_cache, args.debug)
+        out = run_pipeline_on_sample(pipeline, sample, schema_cache, args.debug)
         latency_ms = int((time.perf_counter() - t0) * 1000)
 
-        # Evaluate
-        metrics = evaluate_sql_match(result["sql"], sample.gold_sql, sample.db_path)
-
-        # Store result
-        eval_result = {
+        metrics = evaluate_sql(out["sql"], sample.gold_sql, sample.db_path)
+        row = {
             "source": "spider",
             "db_id": sample.db_id,
             "query": sample.question,
             "gold_sql": sample.gold_sql,
-            "pred_sql": result["sql"],
-            "ok": result["ok"],
+            "pred_sql": out["sql"],
+            "ok": out["ok"],
             "latency_ms": latency_ms,
-            "em": metrics["exact_match"],
-            "sm": metrics["set_match"],
-            "exec_acc": metrics["exec_accuracy"],
-            "error": result.get("error"),
-            "trace": result.get("traces", []),
+            "em": metrics["em"],
+            "sm": metrics["sm"],
+            "exec_acc": metrics["exec"],
+            "error": out.get("error"),
+            "trace": out.get("trace", []),
         }
-        results.append(eval_result)
+        eval_rows.append(row)
 
-        # Debug output
         if args.debug:
-            status = "✅" if result["ok"] and metrics["exact_match"] == 1 else "⚠️"
+            status = "✅" if row["ok"] and row["em"] == 1.0 else "⚠️"
             print(
-                f"{status} ({latency_ms} ms) | EM={metrics['exact_match']:.0f} SM={metrics['set_match']:.0f} ExecAcc={metrics['exec_accuracy']:.1f}"
+                f"{status} ({latency_ms} ms) | EM={row['em']} SM={row['sm']} ExecAcc={row['exec_acc']}"
             )
-            if metrics["exact_match"] < 1:
-                print(f"    gold: {sample.gold_sql[:100]}")
-                print(f"    pred: {result['sql'][:100] if result['sql'] else 'EMPTY'}")
+            if row["em"] < 1.0:
+                print(f"    gold: {sample.gold_sql}")
+                print(f"    pred: {out['sql'] or 'EMPTY'}")
 
-    # Calculate aggregates
-    total = len(results)
-    successful = sum(1 for r in results if r["ok"])
-    avg_em = sum(r["em"] for r in results) / total if total > 0 else 0
-    avg_sm = sum(r["sm"] for r in results) / total if total > 0 else 0
-    avg_ea = sum(r["exec_acc"] for r in results) / total if total > 0 else 0
-    avg_latency = sum(r["latency_ms"] for r in results) / total if total > 0 else 0
-
-    # Save results
-    eval_jsonl = RESULT_DIR / "eval.jsonl"
-    with open(eval_jsonl, "w") as f:
-        for r in results:
+    # persist eval.jsonl
+    RESULT_ROOT.mkdir(parents=True, exist_ok=True)
+    RESULT_DIR.mkdir(parents=True, exist_ok=True)
+    with (RESULT_DIR / "eval.jsonl").open("w", encoding="utf-8") as f:
+        for r in eval_rows:
             json.dump(r, f, ensure_ascii=False)
             f.write("\n")
 
+    # aggregates
+    total = len(eval_rows)
+    success = sum(1 for r in eval_rows if r["ok"])
+    avg_em = sum(r["em"] for r in eval_rows) / total if total else 0.0
+    avg_sm = sum(r["sm"] for r in eval_rows) / total if total else 0.0
+    avg_exec = sum(r["exec_acc"] for r in eval_rows) / total if total else 0.0
+    avg_lat = sum(r["latency_ms"] for r in eval_rows) / total if total else 0.0
+    p50 = _percentile([r["latency_ms"] for r in eval_rows], 50.0)
+    p95 = _percentile([r["latency_ms"] for r in eval_rows], 95.0)
+
+    stage_means = _collect_stage_means(eval_rows)
+
     summary = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "total": total,
-        "success": successful,
-        "success_rate": round(successful / total, 3) if total else 0,
-        "avg_latency_ms": round(avg_latency, 1),
-        "EM": round(avg_em, 3),
-        "SM": round(avg_sm, 3),
-        "ExecAcc": round(avg_ea, 3),
         "split": args.split,
         "config": args.config,
+        "total": total,
+        "success": success,
+        "success_rate": round(success / total, 3) if total else 0.0,
+        "avg_latency_ms": round(avg_lat, 1),
+        "p50_latency_ms": round(p50, 1),
+        "p95_latency_ms": round(p95, 1),
+        "EM": round(avg_em, 3),
+        "SM": round(avg_sm, 3),
+        "ExecAcc": round(avg_exec, 3),
+        **{f"{s}_avg_ms": stage_means[s] for s in STAGES},
     }
 
     (RESULT_DIR / "summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
     )
 
+    # CSV
+    with (RESULT_DIR / "results.csv").open("w", encoding="utf-8") as f:
+        f.write("db_id,query,ok,em,sm,exec_acc,latency_ms\n")
+        for r in eval_rows:
+            f.write(
+                f"{r['db_id']},{json.dumps(r['query'])},{'✅' if r['ok'] else '❌'},"
+                f"{r['em']},{r['sm']},{r['exec_acc']},{r['latency_ms']}\n"
+            )
+
     print("\n================== Evaluation Summary ==================")
     print(f"Total samples:   {total}")
-    print(f"Successful runs: {successful} ({summary['success_rate'] * 100:.1f}%)")
+    print(f"Successful runs: {success} ({summary['success_rate'] * 100:.1f}%)")
     print(f"Avg EM:          {summary['EM']}")
     print(f"Avg SM:          {summary['SM']}")
     print(f"Avg ExecAcc:     {summary['ExecAcc']}")
-    print(f"Avg Latency:     {summary['avg_latency_ms']} ms")
+    print(
+        f"Avg Latency:     {summary['avg_latency_ms']} ms | p50={summary['p50_latency_ms']} ms | p95={summary['p95_latency_ms']} ms"
+    )
     print(f"Results saved to {RESULT_DIR}")
     print("========================================================")
 
