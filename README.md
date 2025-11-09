@@ -1,198 +1,190 @@
 # 🧩 NL2SQL Copilot
 
-A modular **Text-to-SQL Copilot** that converts natural-language questions into **safe, verified SQL queries**.
-Built with **FastAPI**, **LangGraph**, and **SQLAlchemy**, designed for **read-only databases** and benchmarked on **Spider** and **Dr.Spider** datasets.
+[![CI](https://github.com/melika-kheirieh/nl2sql-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/melika-kheirieh/nl2sql-copilot/actions/workflows/ci.yml)
+[![Docker](https://img.shields.io/badge/docker-ready-blue?logo=docker)](#)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+A production-grade **Text-to-SQL Copilot** that converts natural-language questions into **safe, verified SQL**.
+Built for analytics engineers who need accuracy, transparency, and control — powered by **FastAPI**, **LangGraph**, and **Pydantic-AI**.
 
 ---
 
-> 💡 **Why it matters**
-> In real analytics teams, analysts often need quick insights without writing SQL.
-> **NL2SQL Copilot** bridges that gap by translating plain-English questions into validated, read-only SQL — reducing query errors and saving hours of analyst time.
->
-> 🧬 **Evolution Note**
-> This repository is the next-generation version of [NL2SQL Copilot Prototype](https://github.com/melika-kheirieh/nl2sql-copilot-prototype).
-> It refactors the original prototype into a **production-grade, modular architecture** —
-> adding configuration-driven pipelines, safety layers, benchmarks, and a Streamlit UI for evaluation.
+## 🚀 Overview
+
+`NL2SQL Copilot` is an **agentic, modular pipeline** that plans, generates, verifies, and repairs SQL queries.
+It ensures correctness and safety through structured stages, evaluation on the **Spider** dataset, and full observability support.
+
+> 💡 Designed for **read-only production databases** with **self-repair**, **metrics**, and **CI/CD** baked in.
 
 ---
 
-## 🚀 Quick Start
+## 🧠 Agentic Architecture
 
-### 1️⃣ Clone the repo
+```
+
+Natural Language
+↓
+[ Detector ]
+↓
+[ Planner ]
+↓
+[ Generator (LLM) ]
+↓
+[ Safety ]
+↓
+[ Executor ]
+↓
+[ Verifier ]
+↓
+[ Repair ]
+
+````
+
+Each stage is isolated, configurable via YAML, and observable through structured traces and Prometheus metrics.
+
+| Stage | Responsibility |
+|--------|----------------|
+| **Detector** | Identify whether a query is Text-to-SQL |
+| **Planner** | Extract user intent and SQL plan |
+| **Generator** | Call LLM to synthesize SQL |
+| **Safety** | Block unsafe or non-SELECT queries |
+| **Executor** | Execute query in read-only sandbox |
+| **Verifier** | Compare results, detect mismatch |
+| **Repair** | Self-healing loop triggered on failure |
+
+---
+
+## 📊 Benchmark (Spider dataset)
+
+Dataset: [Spider](https://yale-lily.github.io/spider) by Yale LILY Lab.
+Evaluated on the **Spider dev subset (20 samples)** using the reproducible evaluation toolkit.
+
+| Metric | Value |
+|--------|--------|
+| EM (Exact Match) | 0.15 |
+| SM (Structural Match) | 0.70 |
+| ExecAcc (Execution Accuracy) | 0.73 |
+| Avg Latency | 8.11 s |
+| p50 Latency | 9.42 s |
+| p95 Latency | 13.88 s |
+
+> High **Structural Match** and **Execution Accuracy** indicate strong semantic correctness;
+> lower EM reflects harmless formatting differences.
+
+Run reproducible benchmarks:
+
+```bash
+export SPIDER_ROOT="$PWD/data/spider"
+PYTHONPATH=$PWD python benchmarks/evaluate_spider_pro.py --spider --split dev --limit 20
+PYTHONPATH=$PWD python benchmarks/plot_results.py
+````
+
+Results & plots → `benchmarks/results_pro/20251109-171247/`
+
+![Metrics Overview](benchmarks/results_pro/20251109-171247/metrics_overview.png)
+
+---
+
+## ⚙️ Key Features
+
+✅ **Agentic architecture** – multi-stage pipeline with feedback loop
+
+🛡️ **Safety layer** – SELECT-only guardrails and AST validation
+
+🔁 **Self-repair** – automatic retry when verification fails
+
+📊 **Reproducible evaluation** – integrated Spider / Dr.Spider benchmarking
+
+📦 **Config-driven design** – YAML pipeline factory
+
+🧩 **Plug-and-play adapters** – SQLite / PostgreSQL / OpenAI / Anthropic / Ollama
+
+🧠 **FastAPI service + Streamlit UI** – demo or API mode
+
+🧰 **CI/CD ready** – Makefile, Ruff, Mypy, Pytest, Docker, GitHub Actions
+
+📈 **Observability stack** – Prometheus & Grafana metrics for latency and errors
+
+---
+
+## 🧩 Observability & GenAIOps
+
+Monitor every stage of the pipeline in real-time:
+
+* `/metrics` endpoint exposed via FastAPI
+* Prometheus + Grafana stack with `make obs-up`
+* Metrics tracked:
+
+  * `nl2sql_stage_latency_ms`
+  * `nl2sql_stage_error_total`
+  * `nl2sql_query_exec_count`
+  * `nl2sql_repair_success_rate`
+
+```bash
+make obs-up      # start Prometheus + Grafana
+make obs-down    # stop the stack
+```
+
+---
+
+## 🧪 Quick Start
+
+### 1️⃣ Clone & Run
+
 ```bash
 git clone https://github.com/melika-kheirieh/nl2sql-copilot.git
 cd nl2sql-copilot
-````
+make run
+```
 
-### 2️⃣ Build and run with Docker
+Or build with Docker:
 
 ```bash
 docker build -t nl2sql-copilot .
 docker run --rm -p 8000:8000 nl2sql-copilot
 ```
 
-Then open [http://localhost:8000/docs](http://localhost:8000/docs) 🚀
-Or launch the [Streamlit Demo](http://localhost:7860) to test it interactively.
+API available at [http://localhost:8000/docs](http://localhost:8000/docs)
+Streamlit demo at [http://localhost:7860](http://localhost:7860)
 
 ---
 
-## 🧠 Demo
-
-🎯 **Live Demo:** [Try it on Hugging Face Spaces →](https://huggingface.co/spaces/melika-kheirieh/nl2sql-copilot)
-
-You can ask a question in plain English — the Copilot plans, generates, verifies, and safely executes an SQL query.
-
-**User Query**
-
-> show top 5 albums by total sales
-
-**Generated SQL**
-
-```sql
-SELECT albums.Title, SUM(invoice_items.UnitPrice * invoice_items.Quantity) AS total_sales
-FROM albums
-JOIN tracks ON albums.AlbumId = tracks.AlbumId
-JOIN invoice_items ON invoice_items.TrackId = tracks.TrackId
-GROUP BY albums.Title
-ORDER BY total_sales DESC
-LIMIT 5;
-```
-
-**Execution Result (preview)**
-
-| Album             | Total Sales |
-| ----------------- | ----------- |
-| Greatest Hits     | 155.34      |
-| Let There Be Rock | 133.09      |
-| Big Ones          | 128.44      |
-
-**Trace**
-
-```json
-[
-  {"stage": "planner", "duration_ms": 38, "summary": "Identified SQL intent"},
-  {"stage": "generator", "duration_ms": 201, "summary": "LLM generated SQL"},
-  {"stage": "safety", "duration_ms": 6, "summary": "Validated SELECT-only"},
-  {"stage": "executor", "duration_ms": 92, "summary": "Executed successfully"}
-]
-```
-
-![Demo Screenshot](docs/demo-screenshot.png)
-
----
-
-## 🧱 Project Structure
-
-```
-nl2sql-copilot/
-│
-├── app/                 # FastAPI app, routers, schemas
-├── nl2sql/              # Core pipeline (Planner → Generator → Safety → Executor → Verifier)
-├── adapters/            # Database and LLM adapters
-├── benchmarks/          # Evaluation scripts and results
-├── ui/                  # Streamlit dashboard (demo + benchmark)
-├── configs/             # Pipeline configs (YAML-based)
-│
-├── Dockerfile
-├── requirements.in / .txt
-└── README.md
-```
-
----
-
-## ⚙️ How It Works
-
-The Copilot runs a **multi-stage pipeline** ensuring every SQL query is both correct and safe:
-
-```
-Natural Language
-   ↓
-[ Planner ] → [ Generator (LLM) ] → [ Safety ] → [ Executor ] → [ Verifier ] → [ Repair ]
-```
-
-Each stage is modular and configurable via `configs/pipeline.yaml`.
-All queries execute inside a **read-only sandbox**.
-
----
-
-## 🔒 Safety Layer
-
-Before execution, every SQL statement is validated:
-
-| Rule               | Example Blocked               |
-| ------------------ | ----------------------------- |
-| DML not allowed    | `DELETE FROM users`           |
-| Multi-statement    | `SELECT *; DROP TABLE users`  |
-| Forbidden keywords | `ALTER`, `TRUNCATE`, `UPDATE` |
-
-✅ Only safe, single-statement `SELECT` queries are executed.
-
----
-
-## 📊 Benchmark (sample)
-
-Evaluated on a subset of the [Spider](https://yale-lily.github.io/spider) dataset using `gpt-4o-mini`:
-
-| Query                       | Type          | Correct | Latency (ms) | Model       |
-| --------------------------- | ------------- | ------- | ------------ | ----------- |
-| list all artists            | simple select | ✅       | 118          | gpt-4o-mini |
-| total invoices per country  | aggregation   | ✅       | 127          | gpt-4o-mini |
-| top 3 customers by spending | aggregation   | ✅       | 141          | gpt-4o-mini |
-| albums released before 2000 | filter        | ✅       | 122          | gpt-4o-mini |
-| top 5 sales by genre        | join          | ✅       | 149          | gpt-4o-mini |
-
-*(see `benchmarks/results.csv` for detailed results)*
-
----
-
-## 🧩 Key Features
-
-* ✅ **Modular pipeline** (Planner → Generator → Safety → Executor → Verifier → Repair)
-* 🛡️ **SQL safety filters** (SELECT-only, blacklist, AST validation)
-* 🔁 **Self-repair loop** for failed executions
-* 🧠 **LLM-driven generator** (OpenAI / Ollama / Anthropic)
-* 📊 **Evaluation toolkit** for latency / accuracy / cost
-* ⚙️ **Config-driven architecture** (`Pipeline.from_config("configs/pipeline.yaml")`)
-* 🧰 **PostgreSQL + SQLite adapters**
-* 🎛️ **Streamlit UI** for interactive demo & benchmark
-* 🧩 Built with **FastAPI**, **LangGraph**, **Pydantic-AI**, **SQLAlchemy**
-
----
-
-## 🧰 Tech Stack
-
-| Layer         | Tools / Libraries                         |
-| ------------- | ----------------------------------------- |
-| Backend API   | FastAPI, Uvicorn                          |
-| Pipeline Core | Python 3.12, Pydantic, SQLGlot            |
-| LLM Interface | Pydantic-AI (OpenAI / Anthropic / Ollama) |
-| Database      | SQLite (default), PostgreSQL              |
-| Evaluation    | Spider / Dr.Spider                        |
-| UI            | Streamlit + Plotly                        |
-| CI/CD         | GitHub Actions, Makefile, Docker          |
-
----
-
-## 🧪 Development
+## 🧭 For Developers & CI/CD
 
 ```bash
-pip install -r requirements.txt
-pytest -q
-ruff check .
-mypy .
+make lint          # Ruff
+make typecheck     # Mypy
+make test          # Pytest
+make bench         # Run benchmark suite
 ```
+
+### CI/CD Highlights
+
+* Runs on GitHub Actions (`make check`)
+* Enforces formatting, typing, tests, and Docker build
+* Publishes Docker image to GHCR on successful merge
 
 ---
 
-## 🧭 Roadmap
+## 🎯 Why it matters
 
-* [ ] Add multilingual query support (Persian / English)
-* [ ] Improve self-repair accuracy
-* [ ] Add cost tracking per query
-* [ ] Integrate Prometheus metrics
+* Bridges **natural language and databases** with measurable reliability
+* Provides **reproducible evaluation** for continuous model tracking
+* Delivers **production-level resilience** via self-repair and observability
+* Demonstrates **AI software engineering** beyond prompt design
+
+---
+
+## 👤 Author
+
+**Melika Kheirieh**
+AI Engineer & Researcher in Natural Language Interfaces for Databases
+[GitHub](https://github.com/melika-kheirieh) · [LinkedIn](https://www.linkedin.com/in/melika-kheirieh-03a7b5176/)
+
+> This project evolved from [NL2SQL Copilot Prototype](https://github.com/melika-kheirieh/nl2sql-copilot-prototype), refactored into a production-grade, modular agent.
 
 ---
 
 ## 📄 License
 
-MIT © 2025 [Melika Kheirieh](https://github.com/melika-kheirieh)
+MIT © 2025 Melika Kheirieh
