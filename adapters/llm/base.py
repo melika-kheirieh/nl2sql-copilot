@@ -3,7 +3,7 @@ from typing import Tuple, Dict, Any, Protocol
 
 
 class LLMProvider(Protocol):
-    provider_id: str
+    PROVIDER_ID: str
 
     def plan(
         self, *, user_query: str, schema_preview: str

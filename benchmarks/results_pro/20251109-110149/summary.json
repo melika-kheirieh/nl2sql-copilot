@@ -1,0 +1,21 @@
+{
+  "timestamp": "2025-11-09T11:02:43",
+  "split": "dev",
+  "config": "configs/sqlite_pipeline.yaml",
+  "total": 5,
+  "success": 5,
+  "success_rate": 1.0,
+  "avg_latency_ms": 10640.4,
+  "p50_latency_ms": 12419.0,
+  "p95_latency_ms": 14589.8,
+  "EM": 0.4,
+  "SM": 0.8,
+  "ExecAcc": 0.8,
+  "detector_avg_ms": 0.0,
+  "planner_avg_ms": 8007.75,
+  "generator_avg_ms": 3216.25,
+  "safety_avg_ms": 2.0,
+  "executor_avg_ms": 1.25,
+  "verifier_avg_ms": 0.58,
+  "repair_avg_ms": 1030.0
+}

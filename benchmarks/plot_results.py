@@ -124,6 +124,35 @@ def plot_latency_per_stage(run: Path, summary: dict, rows: list[dict]) -> None:
     plt.close()
 
 
+def plot_errors_overview(run: Path) -> None:
+    p = run / "trace.jsonl"
+    if not p.exists():
+        return
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    with p.open("r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            for t in obj.get("trace", []):
+                et = t.get("error_type")
+                if et:
+                    counts[et] += 1
+    if not counts:
+        return
+    labels, values = zip(*sorted(counts.items(), key=lambda x: x[1], reverse=True))
+    plt.figure(figsize=(9, 4))
+    plt.bar(labels, values)
+    plt.title("Errors by Type")
+    plt.ylabel("Count")
+    plt.tight_layout()
+    plt.savefig(run / "errors_overview.png")
+    plt.close()
+
+
 def main() -> None:
     run = _latest_run_dir()
     print(f"📂 Using latest run: {run.name}")
@@ -132,8 +161,9 @@ def main() -> None:
     plot_metrics_overview(run, summary)
     plot_latency_hist(run, rows)
     plot_latency_per_stage(run, summary, rows)
+    plot_errors_overview(run)
     print(
-        "✅ Saved: metrics_overview.png, latency_histogram.png, latency_per_stage.png"
+        "✅ Saved: metrics_overview.png, latency_histogram.png, latency_per_stage.png, errors_overview.png"
     )
 
 
