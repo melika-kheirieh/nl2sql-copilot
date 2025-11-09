@@ -1,6 +1,0 @@
-source,db_id,query,em,sm,exec_acc,ok,latency_ms
-demo,demo,list all customers,,,,❌,6756
-demo,demo,show total invoices per country,,,,✅,8901
-demo,demo,top 3 albums by total sales,,,,✅,1
-demo,demo,artists with more than 3 albums,,,,❌,12342
-demo,demo,number of employees per city,,,,✅,7547

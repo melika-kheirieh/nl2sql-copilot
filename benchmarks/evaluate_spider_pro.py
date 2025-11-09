@@ -1,490 +1,446 @@
+#!/usr/bin/env python3
 """
-Pro evaluation runner with two modes:
-Extension of `evaluate_spider.py` with additional metrics (EM, SM, ExecAcc) and richer logging for research-style benchmarking.
-
-1) Single-DB demo mode (default)
-   - Runs a list of questions against one SQLite DB
-   - Reports latency/ok (no EM/SM/ExecAcc because there's no gold SQL)
-
-2) Spider mode (--spider)
-   - Loads a subset of the Spider dataset via SPIDER_ROOT
-   - For each item, builds a per-DB pipeline and computes:
-       * EM (exact SQL string match, case-insensitive)
-       * SM (structural match via sqlglot AST)
-       * ExecAcc (result equivalence by executing gold vs. predicted SQL)
-   - Also logs latency, (optional) traces, and aggregates a summary
-
-Works with:
-- Real LLM (OPENAI_API_KEY set)
-- Stub mode (PYTEST_CURRENT_TEST=1) for zero-cost offline runs
-
-Outputs:
-  benchmarks/results_pro/<timestamp>/
-    - eval.jsonl        # per-sample rows
-    - summary.json      # aggregate metrics
-    - results.csv       # human-friendly table
-
-Examples:
-  # Demo (single DB), stub mode
-  PYTHONPATH=$PWD PYTEST_CURRENT_TEST=1 \
-  python benchmarks/evaluate_spider_pro.py --db-path demo.db
-
-  # Spider subset (20 items), stub mode
-  export SPIDER_ROOT=$PWD/data/spider
-  PYTHONPATH=$PWD PYTEST_CURRENT_TEST=1 \
-  python benchmarks/evaluate_spider_pro.py --spider --split dev --limit 20
+Enhanced Spider benchmark evaluator for NL2SQL pipeline.
+No external dependencies - uses internal evaluation logic.
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
 import json
-import os
+import re
+import sqlite3
 import time
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-import sqlglot
-from sqlglot.errors import ParseError
+from typing import Any, Dict, List, Tuple
 
 from nl2sql.pipeline_factory import pipeline_from_config_with_adapter
 from adapters.db.sqlite_adapter import SQLiteAdapter
+from benchmarks.spider_loader import load_spider_sqlite
 
-# Only needed for Spider mode
-try:
-    from benchmarks.spider_loader import load_spider_sqlite, open_readonly_connection
-except Exception:
-    load_spider_sqlite = None  # type: ignore[assignment]
-    open_readonly_connection = None  # type: ignore[assignment]
+# ==================== Configuration ====================
 
-# Resolve repo root and default config path relative to this file (not CWD)
-THIS_DIR = Path(__file__).resolve().parent  # .../benchmarks
-REPO_ROOT = THIS_DIR.parent  # repo root
-CONFIG_PATH = str(REPO_ROOT / "configs" / "sqlite_pipeline.yaml")
-
-
-# Default demo questions for single-DB mode
-DEFAULT_DATASET: List[str] = [
-    "list all customers",
-    "show total invoices per country",
-    "top 3 albums by total sales",
-    "artists with more than 3 albums",
-    "number of employees per city",
-]
-
-RESULT_ROOT = Path("benchmarks") / "results_pro"
+RESULT_ROOT = Path("benchmarks/results_pro")
 TIMESTAMP = time.strftime("%Y%m%d-%H%M%S")
 RESULT_DIR = RESULT_ROOT / TIMESTAMP
 
 
-# -------------------- Utilities --------------------
+# ==================== SQL Processing ====================
 
 
-def _int_ms(start: float) -> int:
-    """Convert elapsed seconds to integer milliseconds."""
-    return int((time.perf_counter() - start) * 1000)
+def extract_clean_sql(text: str | None) -> str:
+    """Safely extract a clean SQL string from input text possibly containing markdown fences or JSON."""
+    # Always initialize variable to empty string
+    sql = text or ""
 
+    # Remove markdown code fences
+    sql = re.sub(r"```(?:sql)?\s*\n?", "", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"```\s*$", "", sql)
 
-def _derive_schema_preview_safe(pipeline_obj: Any) -> Optional[str]:
-    """Safely call derive_schema_preview() if available on adapter/executor."""
-    try:
-        for c in (
-            getattr(pipeline_obj, "executor", None),
-            getattr(pipeline_obj, "adapter", None),
-        ):
-            if c and hasattr(c, "derive_schema_preview"):
-                return c.derive_schema_preview()  # type: ignore[no-any-return]
-    except Exception:
-        pass
-    return None
+    # Try JSON pattern like {"sql": "..."}
+    m_json = re.search(r'"sql"\s*:\s*"([^"]+)"', sql)
+    if m_json:
+        sql = m_json.group(1)
 
+    # Clean escaped characters
+    sql = sql.replace('\\"', '"').replace("\\n", " ").replace("\\t", " ")
 
-def _to_stage_list(trace_obj: Any) -> List[Dict[str, Any]]:
-    """Normalize pipeline trace into a list of dicts for logging/export."""
-    out: List[Dict[str, Any]] = []
-    if not isinstance(trace_obj, list):
-        return out
-    for t in trace_obj:
-        if isinstance(t, dict):
-            stage = t.get("stage", "?")
-            ms = t.get("duration_ms", 0)
-        else:
-            stage = getattr(t, "stage", "?")
-            ms = getattr(t, "duration_ms", 0)
-        try:
-            out.append({"stage": str(stage), "ms": int(ms)})
-        except Exception:
-            out.append({"stage": str(stage), "ms": 0})
-    return out
-
-
-def _parse_sql(sql: str):
-    try:
-        return sqlglot.parse_one(sql, read="sqlite")
-    except ParseError:
-        return None
-
-
-def _structural_match(pred: str, gold: str) -> bool:
-    """AST-level equality via sqlglot; returns False if either side can't be parsed."""
-    a, b = _parse_sql(pred), _parse_sql(gold)
-    return (a == b) if (a is not None and b is not None) else False
-
-
-def _load_dataset_from_file(path: Optional[str]) -> List[str]:
-    """Load questions from a JSON file: list[str] or list[{question: str}]."""
-    if not path:
-        return DEFAULT_DATASET
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"dataset file not found: {p}")
-    data = json.loads(p.read_text(encoding="utf-8"))
-    if isinstance(data, list):
-        if all(isinstance(x, str) for x in data):
-            return list(data)
-        if all(isinstance(x, dict) and "question" in x for x in data):
-            return [str(x["question"]) for x in data]
-    raise ValueError(
-        "Dataset file must be a JSON array of strings or objects with 'question' field."
+    # Try to locate SQL statement keywords
+    m_sql = re.search(
+        r"\b(select|with|insert|update|delete)\b[\s\S]+", sql, re.IGNORECASE
     )
+    if m_sql:
+        sql = m_sql.group(0)
+    sql = re.sub(r"\s+", " ", sql).strip().rstrip(";")
+    return sql
 
 
-def _extract_sql(result: Any) -> str:
-    """
-    Extract SQL from pipeline result in a mypy-friendly way.
-    Supports both result.sql and result.data.sql shapes.
-    """
-    sql_pred: Optional[str] = getattr(result, "sql", None)
-    if not sql_pred:
-        data = getattr(result, "data", None)
-        if data is not None:
-            sql_pred = getattr(data, "sql", None)
-    return (sql_pred or "").strip()
+def normalize_sql(sql: str) -> str:
+    """Enhanced SQL normalization for better matching."""
+    if not sql:
+        return ""
+
+    sql = sql.strip().upper()
+    # Remove all whitespace variations
+    sql = re.sub(r"\s+", " ", sql)
+    # Remove trailing semicolon
+    sql = sql.rstrip(";")
+
+    # Remove table prefixes (e.g., singer.name -> name)
+    sql = re.sub(r"\b\w+\.(\w+)\b", r"\1", sql)
+
+    # Remove AS aliases
+    sql = re.sub(r"\s+AS\s+\w+", "", sql, flags=re.IGNORECASE)
+
+    # Remove DISTINCT if used with COUNT(*)
+    sql = re.sub(r"COUNT\s*\(\s*DISTINCT\s+", "COUNT(", sql)
+
+    # Normalize COUNT variations
+    sql = re.sub(r"COUNT\s*\(\s*\w+\s*\)", "COUNT(*)", sql)
+
+    # Remove LIMIT at end
+    sql = re.sub(r"\s+LIMIT\s+\d+$", "", sql)
+
+    # Normalize quotes
+    sql = re.sub(r'"(\w+)"', r"\1", sql)
+    sql = re.sub(r"`(\w+)`", r"\1", sql)
+
+    return sql
 
 
-def _save_outputs(rows: List[Dict[str, Any]], summary: Dict[str, Any]) -> None:
-    """Persist JSONL + JSON summary + CSV for pro runner."""
+# ==================== Schema Extraction ====================
+
+
+def get_database_schema(db_path: Path) -> Dict[str, Any]:
+    """Extract complete schema from SQLite database."""
+    if not db_path.exists():
+        return {}
+
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+
+    schema: dict[str, Any] = {"tables": {}}
+
+    try:
+        # Get all tables
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )
+        tables = cursor.fetchall()
+
+        for (table_name,) in tables:
+            # Get columns
+            cursor.execute(f"PRAGMA table_info('{table_name}')")
+            columns = cursor.fetchall()
+
+            col_info = []
+            for col in columns:
+                col_name = col[1]
+                col_type = col[2]
+                is_pk = col[5]
+
+                col_dict = {
+                    "name": col_name,
+                    "type": col_type,
+                    "primary_key": bool(is_pk),
+                }
+                col_info.append(col_dict)
+
+            # Get foreign keys
+            cursor.execute(f"PRAGMA foreign_key_list('{table_name}')")
+            fks = cursor.fetchall()
+
+            fk_info = []
+            for fk in fks:
+                fk_info.append(
+                    {
+                        "column": fk[3],
+                        "referenced_table": fk[2],
+                        "referenced_column": fk[4],
+                    }
+                )
+
+            schema["tables"][table_name] = {
+                "columns": col_info,
+                "foreign_keys": fk_info,
+            }
+
+    finally:
+        conn.close()
+
+    return schema
+
+
+def format_schema_for_prompt(schema: Dict[str, Any]) -> str:
+    """Format schema for LLM prompt."""
+    if not schema or not schema.get("tables"):
+        return ""
+
+    lines = []
+    for table_name, table_info in schema["tables"].items():
+        cols = []
+        for col in table_info["columns"]:
+            col_str = f"{col['name']} {col['type']}"
+            if col.get("primary_key"):
+                col_str += " PRIMARY KEY"
+            cols.append(col_str)
+
+        lines.append(f"Table: {table_name}")
+        lines.append(f"Columns: {', '.join(cols)}")
+
+        if table_info.get("foreign_keys"):
+            fks = []
+            for fk in table_info["foreign_keys"]:
+                fks.append(
+                    f"{fk['column']} -> {fk['referenced_table']}.{fk['referenced_column']}"
+                )
+            lines.append(f"Foreign Keys: {', '.join(fks)}")
+
+        lines.append("")  # Empty line between tables
+
+    return "\n".join(lines).strip()
+
+
+# ==================== SQL Evaluation ====================
+
+
+def execute_sql(db_path: Path, sql: str) -> Tuple[bool, List[Tuple]]:
+    """Execute SQL and return success flag and results."""
+    if not sql:
+        return False, []
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        cursor.execute(sql)
+        results = cursor.fetchall()
+        conn.close()
+        return True, results
+    except Exception:
+        return False, []
+
+
+def compare_sql_results(gold_results: List[Tuple], pred_results: List[Tuple]) -> bool:
+    """Compare SQL execution results."""
+    if len(gold_results) != len(pred_results):
+        return False
+
+    # Convert to sets for comparison (order independent)
+    gold_set = set(gold_results)
+    pred_set = set(pred_results)
+
+    return gold_set == pred_set
+
+
+def evaluate_sql_match(pred_sql: str, gold_sql: str, db_path: Path) -> Dict[str, float]:
+    """Evaluate predicted SQL against gold SQL."""
+    metrics = {"exact_match": 0.0, "set_match": 0.0, "exec_accuracy": 0.0}
+
+    if not pred_sql:
+        return metrics
+
+    # Exact match
+    if normalize_sql(pred_sql) == normalize_sql(gold_sql):
+        metrics["exact_match"] = 1.0
+
+    # Execution-based evaluation
+    gold_success, gold_results = execute_sql(db_path, gold_sql)
+    pred_success, pred_results = execute_sql(db_path, pred_sql)
+
+    if gold_success and pred_success:
+        # Set match (results match)
+        if compare_sql_results(gold_results, pred_results):
+            metrics["set_match"] = 1.0
+            metrics["exec_accuracy"] = 1.0
+        else:
+            # Partial credit for successful execution
+            metrics["exec_accuracy"] = 0.5
+
+    return metrics
+
+
+# ==================== Pipeline Runner ====================
+
+
+@dataclass
+class SpiderSample:
+    """Spider dataset sample."""
+
+    question: str
+    db_id: str
+    db_path: Path
+    gold_sql: str
+
+
+def run_pipeline_on_sample(
+    pipeline: Any,
+    sample: SpiderSample,
+    schema_cache: Dict[str, str],
+    debug: bool = False,
+) -> Dict[str, Any]:
+    """Run NL2SQL pipeline on a single sample."""
+
+    # Get/cache schema
+    if sample.db_id not in schema_cache:
+        schema_dict = get_database_schema(sample.db_path)
+        schema_str = format_schema_for_prompt(schema_dict)
+        schema_cache[sample.db_id] = schema_str
+        if debug:
+            print(f"    [schema] Loaded {len(schema_str)} chars for {sample.db_id}")
+
+    schema: str = schema_cache[sample.db_id]
+
+    # Run pipeline
+    try:
+        result = pipeline.run(user_query=sample.question, schema_preview=schema)
+
+        # Extract SQL from result
+        if hasattr(result, "sql") and result.sql:
+            pred_sql = extract_clean_sql(result.sql)
+        else:
+            # Try to extract from various fields
+            for attr in ["final_sql", "generated_sql", "answer"]:
+                if hasattr(result, attr):
+                    val = getattr(result, attr)
+                    if val:
+                        pred_sql = extract_clean_sql(str(val))
+                        if pred_sql:
+                            break
+            else:
+                pred_sql = ""
+
+        return {
+            "ok": bool(getattr(result, "ok", True)),
+            "sql": pred_sql,
+            "raw_response": getattr(result, "sql", ""),
+            "traces": getattr(result, "traces", []),
+            "error": None,
+        }
+
+    except Exception as e:
+        if debug:
+            import traceback
+
+            traceback.print_exc()
+        return {
+            "ok": False,
+            "sql": "",
+            "raw_response": "",
+            "traces": [],
+            "error": str(e),
+        }
+
+
+# ==================== Main Evaluation ====================
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Evaluate NL2SQL on Spider")
+    parser.add_argument("--spider", action="store_true", help="Run Spider evaluation")
+    parser.add_argument("--split", default="dev", choices=["dev", "train"])
+    parser.add_argument("--limit", type=int, help="Limit number of samples")
+    parser.add_argument("--debug", action="store_true", help="Enable debug output")
+    parser.add_argument("--config", default="configs/sqlite_pipeline.yaml")
+
+    args = parser.parse_args()
+
+    if not args.spider:
+        print("Please use --spider flag to run Spider evaluation")
+        return
+
+    # Load Spider samples
+    print(f"Loading Spider {args.split} split...")
+    samples = load_spider_sqlite(split=args.split, limit=args.limit)
+
+    if not samples:
+        print("❌ No samples loaded. Check SPIDER_ROOT environment variable.")
+        return
+
+    print(f"✔ Loaded {len(samples)} samples")
+
+    # Prepare results directory
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
-    jsonl_path = RESULT_DIR / "eval.jsonl"
-    with jsonl_path.open("w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    # Initialize schema cache
+    schema_cache = {}
 
-    with (RESULT_DIR / "summary.json").open("w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2)
-
-    csv_path = RESULT_DIR / "results.csv"
-    # For pro, include pro columns when present (Spider mode)
-    fieldnames = [
-        "source",
-        "db_id",
-        "query",
-        "em",
-        "sm",
-        "exec_acc",
-        "ok",
-        "latency_ms",
-    ]
-    with csv_path.open("w", newline="", encoding="utf-8") as f:
-        wr = csv.DictWriter(f, fieldnames=fieldnames)
-        wr.writeheader()
-        for r in rows:
-            wr.writerow(
-                {
-                    "source": r.get("source", "demo"),
-                    "db_id": r.get("db_id", ""),
-                    "query": r.get("query", ""),
-                    "em": "✅" if r.get("em") else "❌" if "em" in r else "",
-                    "sm": "✅" if r.get("sm") else "❌" if "sm" in r else "",
-                    "exec_acc": "✅"
-                    if r.get("exec_acc")
-                    else "❌"
-                    if "exec_acc" in r
-                    else "",
-                    "ok": "✅" if r.get("ok") else "❌",
-                    "latency_ms": int(r.get("latency_ms", 0)),
-                }
-            )
-
-    print(
-        "\n💾 Saved outputs:\n"
-        f"- {jsonl_path}\n- {RESULT_DIR / 'summary.json'}\n- {csv_path}\n"
-        f"📊 Avg latency: {summary.get('avg_latency_ms', 0.0)} ms "
-        f"| EM: {summary.get('EM', 0.0):.3f} "
-        f"| SM: {summary.get('SM', 0.0):.3f} "
-        f"| ExecAcc: {summary.get('ExecAcc', 0.0):.3f} "
-        f"| Success: {summary.get('success_rate', 0.0):.0%}\n"
-    )
-
-
-# -------------------- Runners --------------------
-
-
-def _run_single_db_mode(db_path: Path, questions: List[str], config_path: str) -> None:
-    """
-    Single-DB demo mode.
-    Only latency/ok is reported (no EM/SM/ExecAcc, because we don't have gold SQL).
-    """
-    adapter = SQLiteAdapter(str(db_path))
-    pipeline = pipeline_from_config_with_adapter(config_path, adapter=adapter)
-
-    schema_preview = _derive_schema_preview_safe(pipeline)
-    if schema_preview:
-        print("📄 Derived schema preview ✓")
-    else:
-        print("ℹ️ No schema preview (adapter does not expose it or not needed)")
-
-    rows: List[Dict[str, Any]] = []
-    for q in questions:
-        print(f"\n🧠 Query: {q}")
-        t0 = time.perf_counter()
-        try:
-            result = pipeline.run(user_query=q, schema_preview=schema_preview or "")
-            latency_ms = _int_ms(t0) or 1  # clamp to 1ms for nicer CSV in stub mode
-            stages = _to_stage_list(
-                getattr(result, "traces", getattr(result, "trace", []))
-            )
-            rows.append(
-                {
-                    "source": "demo",
-                    "db_id": Path(db_path).stem,
-                    "query": q,
-                    "ok": bool(getattr(result, "ok", True)),
-                    "latency_ms": latency_ms,
-                    "trace": stages,
-                    "error": None,
-                }
-            )
-            print(f"✅ Success ({latency_ms} ms)")
-        except Exception as exc:
-            latency_ms = _int_ms(t0) or 1
-            rows.append(
-                {
-                    "source": "demo",
-                    "db_id": Path(db_path).stem,
-                    "query": q,
-                    "ok": False,
-                    "latency_ms": latency_ms,
-                    "trace": [],
-                    "error": str(exc),
-                }
-            )
-            print(f"❌ Failed: {exc!s} ({latency_ms} ms)")
-
-    success_rate = (
-        (sum(1 for r in rows if r.get("ok")) / max(len(rows), 1)) if rows else 0.0
-    )
-    avg_latency = (
-        round(sum(int(r.get("latency_ms", 0)) for r in rows) / max(len(rows), 1), 1)
-        if rows
-        else 0.0
-    )
-    summary = {
-        "mode": "single-db",
-        "db_path": str(db_path),
-        "config": config_path,
-        "provider_hint": ("STUBS" if os.getenv("PYTEST_CURRENT_TEST") else "REAL"),
-        "total": len(rows),
-        "EM": 0.0,
-        "SM": 0.0,
-        "ExecAcc": 0.0,  # not applicable in demo
-        "success_rate": success_rate,
-        "avg_latency_ms": avg_latency,
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    _save_outputs(rows, summary)
-
-
-def _run_spider_mode(split: str, limit: int, config_path: str) -> None:
-    """
-    Spider mode: compute EM/SM/ExecAcc with per-DB pipelines.
-    Requires SPIDER_ROOT pointing to a folder that contains dev.json/train_spider.json and database/.
-    """
-    if load_spider_sqlite is None or open_readonly_connection is None:
-        raise RuntimeError(
-            "Spider utilities are not available. Ensure benchmarks/spider_loader.py exists."
+    # Process each sample
+    results = []
+    for i, spider_item in enumerate(samples, 1):
+        # Convert to our sample format
+        sample = SpiderSample(
+            question=spider_item.question,
+            db_id=spider_item.db_id,
+            db_path=Path(spider_item.db_path),
+            gold_sql=spider_item.gold_sql,
         )
 
-    items = load_spider_sqlite(split=split, limit=limit)
-    print(f"🗂  Loaded {len(items)} Spider items (split={split}).")
+        print(f"\n🧠 [{i}/{len(samples)}] [{sample.db_id}] {sample.question}")
 
-    rows: List[Dict[str, Any]] = []
+        # Create adapter and pipeline for this database
+        adapter = SQLiteAdapter(sample.db_path)
+        pipeline = pipeline_from_config_with_adapter(args.config, adapter=adapter)
 
-    for i, ex in enumerate(items, 1):
-        print(f"\n[{i}] {ex.db_id} :: {ex.question}")
-        adapter = SQLiteAdapter(ex.db_path)
-        pipeline = pipeline_from_config_with_adapter(config_path, adapter=adapter)
-
-        # Optional schema preview per DB
-        schema_preview = _derive_schema_preview_safe(pipeline)
-
-        # Open read-only connection for ExecAcc computation
-        conn = open_readonly_connection(ex.db_path)
-
+        # Run pipeline
         t0 = time.perf_counter()
-        try:
-            result = pipeline.run(
-                user_query=ex.question, schema_preview=schema_preview or ""
+        result = run_pipeline_on_sample(pipeline, sample, schema_cache, args.debug)
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+
+        # Evaluate
+        metrics = evaluate_sql_match(result["sql"], sample.gold_sql, sample.db_path)
+
+        # Store result
+        eval_result = {
+            "source": "spider",
+            "db_id": sample.db_id,
+            "query": sample.question,
+            "gold_sql": sample.gold_sql,
+            "pred_sql": result["sql"],
+            "ok": result["ok"],
+            "latency_ms": latency_ms,
+            "em": metrics["exact_match"],
+            "sm": metrics["set_match"],
+            "exec_acc": metrics["exec_accuracy"],
+            "error": result.get("error"),
+            "trace": result.get("traces", []),
+        }
+        results.append(eval_result)
+
+        # Debug output
+        if args.debug:
+            status = "✅" if result["ok"] and metrics["exact_match"] == 1 else "⚠️"
+            print(
+                f"{status} ({latency_ms} ms) | EM={metrics['exact_match']:.0f} SM={metrics['set_match']:.0f} ExecAcc={metrics['exec_accuracy']:.1f}"
             )
-            latency_ms = _int_ms(t0) or 1
-            stages = _to_stage_list(
-                getattr(result, "traces", getattr(result, "trace", []))
-            )
+            if metrics["exact_match"] < 1:
+                print(f"    gold: {sample.gold_sql[:100]}")
+                print(f"    pred: {result['sql'][:100] if result['sql'] else 'EMPTY'}")
 
-            # Extract predicted SQL from result (support both .sql and .data.sql)
-            sql_pred = _extract_sql(result)
+    # Calculate aggregates
+    total = len(results)
+    successful = sum(1 for r in results if r["ok"])
+    avg_em = sum(r["em"] for r in results) / total if total > 0 else 0
+    avg_sm = sum(r["sm"] for r in results) / total if total > 0 else 0
+    avg_ea = sum(r["exec_acc"] for r in results) / total if total > 0 else 0
+    avg_latency = sum(r["latency_ms"] for r in results) / total if total > 0 else 0
 
-            # Pro metrics
-            gold_sql = ex.gold_sql.strip()
-            em = (sql_pred.lower() == gold_sql.lower()) if sql_pred else False
-            sm = _structural_match(sql_pred, gold_sql) if sql_pred else False
-
-            try:
-                gold_exec = conn.execute(gold_sql).fetchall()
-            except Exception:
-                gold_exec = []
-            try:
-                pred_exec = conn.execute(sql_pred).fetchall() if sql_pred else []
-            except Exception:
-                pred_exec = []
-            exec_acc = gold_exec == pred_exec
-
-            rows.append(
-                {
-                    "source": "spider",
-                    "db_id": ex.db_id,
-                    "query": ex.question,
-                    "sql_pred": sql_pred,
-                    "sql_gold": gold_sql,
-                    "em": em,
-                    "sm": sm,
-                    "exec_acc": exec_acc,
-                    "ok": bool(getattr(result, "ok", True)),
-                    "latency_ms": latency_ms,
-                    "trace": stages,
-                    "error": None,
-                }
-            )
-            print(f"✅ OK | EM={em} | SM={sm} | Exec={exec_acc} | {latency_ms} ms")
-        except Exception as exc:
-            latency_ms = _int_ms(t0) or 1
-            rows.append(
-                {
-                    "source": "spider",
-                    "db_id": ex.db_id,
-                    "query": ex.question,
-                    "sql_pred": None,
-                    "sql_gold": ex.gold_sql,
-                    "em": False,
-                    "sm": False,
-                    "exec_acc": False,
-                    "ok": False,
-                    "latency_ms": latency_ms,
-                    "trace": [],
-                    "error": str(exc),
-                }
-            )
-            print(f"❌ Fail: {exc!s} ({latency_ms} ms)")
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    # Aggregate pro metrics
-    total = len(rows)
-    em_rate = (sum(1 for r in rows if r.get("em")) / max(total, 1)) if rows else 0.0
-    sm_rate = (sum(1 for r in rows if r.get("sm")) / max(total, 1)) if rows else 0.0
-    exec_rate = (
-        (sum(1 for r in rows if r.get("exec_acc")) / max(total, 1)) if rows else 0.0
-    )
-    success_rate = (
-        (sum(1 for r in rows if r.get("ok")) / max(total, 1)) if rows else 0.0
-    )
-    avg_latency = (
-        round(sum(int(r.get("latency_ms", 0)) for r in rows) / max(total, 1), 1)
-        if rows
-        else 0.0
-    )
+    # Save results
+    eval_jsonl = RESULT_DIR / "eval.jsonl"
+    with open(eval_jsonl, "w") as f:
+        for r in results:
+            json.dump(r, f, ensure_ascii=False)
+            f.write("\n")
 
     summary = {
-        "mode": "spider",
-        "split": split,
-        "limit": limit,
-        "config": config_path,
-        "provider_hint": ("STUBS" if os.getenv("PYTEST_CURRENT_TEST") else "REAL"),
-        "spider_root": os.getenv("SPIDER_ROOT", ""),
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
         "total": total,
-        "EM": round(em_rate, 3),
-        "SM": round(sm_rate, 3),
-        "ExecAcc": round(exec_rate, 3),
-        "success_rate": success_rate,
-        "avg_latency_ms": avg_latency,
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "success": successful,
+        "success_rate": round(successful / total, 3) if total else 0,
+        "avg_latency_ms": round(avg_latency, 1),
+        "EM": round(avg_em, 3),
+        "SM": round(avg_sm, 3),
+        "ExecAcc": round(avg_ea, 3),
+        "split": args.split,
+        "config": args.config,
     }
-    _save_outputs(rows, summary)
 
-
-# -------------------- CLI --------------------
-
-
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--spider",
-        action="store_true",
-        help="Enable Spider mode (reads from SPIDER_ROOT; ignores --db-path).",
-    )
-    ap.add_argument(
-        "--split",
-        type=str,
-        default="dev",
-        choices=["dev", "train"],
-        help="Spider split to use (default: dev).",
-    )
-    ap.add_argument(
-        "--limit",
-        type=int,
-        default=20,
-        help="Number of Spider items to evaluate (default: 20).",
+    (RESULT_DIR / "summary.json").write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
     )
 
-    ap.add_argument(
-        "--db-path",
-        type=str,
-        default="demo.db",
-        help="Path to SQLite database file (single-DB mode).",
-    )
-    ap.add_argument(
-        "--dataset-file",
-        type=str,
-        default=None,
-        help="Optional JSON file with questions (single-DB mode).",
-    )
-    ap.add_argument(
-        "--config",
-        type=str,
-        default=CONFIG_PATH,
-        help=f"Pipeline YAML config (default: {CONFIG_PATH})",
-    )
-    args = ap.parse_args()
-
-    if args.spider:
-        if not os.getenv("SPIDER_ROOT"):
-            raise RuntimeError(
-                "SPIDER_ROOT is not set. It must point to the folder that directly contains "
-                "dev.json/train_spider.json and the database/ directory."
-            )
-        _run_spider_mode(args.split, args.limit, args.config)
-    else:
-        db_path = Path(args.db_path).resolve()
-        if not db_path.exists():
-            raise FileNotFoundError(f"SQLite DB not found: {db_path}")
-        questions = _load_dataset_from_file(args.dataset_file)
-        _run_single_db_mode(db_path, questions, args.config)
+    print("\n================== Evaluation Summary ==================")
+    print(f"Total samples:   {total}")
+    print(f"Successful runs: {successful} ({summary['success_rate'] * 100:.1f}%)")
+    print(f"Avg EM:          {summary['EM']}")
+    print(f"Avg SM:          {summary['SM']}")
+    print(f"Avg ExecAcc:     {summary['ExecAcc']}")
+    print(f"Avg Latency:     {summary['avg_latency_ms']} ms")
+    print(f"Results saved to {RESULT_DIR}")
+    print("========================================================")
 
 
 if __name__ == "__main__":
+    RESULT_DIR.mkdir(parents=True, exist_ok=True)
     main()

@@ -31,9 +31,8 @@ class FinalResult:
 
 class Pipeline:
     """
-    NL2SQL Copilot pipeline.
-    Stages return StageResult; final result is a type-safe FinalResult.
-    DI-ready: all dependencies are injected via __init__.
+    NL2SQL Copilot pipeline:
+      detector → planner → generator → safety → executor → verifier → (optional repair loop).
     """
 
     def __init__(
@@ -54,22 +53,21 @@ class Pipeline:
         self.executor = executor or NoOpExecutor()
         self.verifier = verifier or NoOpVerifier()
         self.repair = repair or NoOpRepair()
+        # If the verifier explicitly requires verification, enforce it in finalize.
+        self.require_verification = bool(getattr(self.verifier, "required", False))
 
-    # ------------------------------------------------------------
+    # ---------------------------- helpers ----------------------------
     @staticmethod
     def _trace_list(*stages: Optional[StageResult]) -> List[dict]:
-        """Collect .trace objects (as dict) from StageResult items if present."""
         traces: List[dict] = []
         for s in stages:
             if not s:
                 continue
             t = getattr(s, "trace", None)
             if t is not None:
-                # t is likely a dataclass – expose as plain dict for JSON safety
                 traces.append(getattr(t, "__dict__", t))
         return traces
 
-    # ------------------------------------------------------------
     @staticmethod
     def _mk_trace(
         stage: str,
@@ -77,7 +75,6 @@ class Pipeline:
         summary: str,
         notes: Optional[Dict[str, Any]] = None,
     ) -> dict:
-        """Create a normalized trace dict (internal: duration may be float)."""
         return {
             "stage": stage,
             "duration_ms": float(duration_ms),
@@ -87,11 +84,6 @@ class Pipeline:
 
     @staticmethod
     def _normalize_traces(traces: List[dict]) -> List[dict]:
-        """
-        Normalize trace list for API/UI:
-        - coerce duration_ms to int
-        - ensure `summary` exists (fallback to a minimal one)
-        """
         norm: List[dict] = []
         for t in traces:
             stage = str(t.get("stage", "unknown"))
@@ -100,37 +92,24 @@ class Pipeline:
                 dur_int = int(round(float(dur)))
             except Exception:
                 dur_int = 0
-            summary = t.get("summary")
-            if not summary:
-                # fallback summary if not provided by stage
-                notes = t.get("notes") or {}
-                failed = bool(notes.get("error") or notes.get("errors"))
-                summary = "failed" if failed else "ok"
             notes = t.get("notes") or {}
-            # preserve any accounting fields if present (token_in/out, cost_usd, ...)
+            summary = t.get("summary") or (
+                "failed" if (notes.get("error") or notes.get("errors")) else "ok"
+            )
             payload = {
                 "stage": stage,
                 "duration_ms": dur_int,
                 "summary": summary,
                 "notes": notes,
             }
-            # keep extra accounting if exists
-            if "token_in" in t:
-                payload["token_in"] = t["token_in"]
-            if "token_out" in t:
-                payload["token_out"] = t["token_out"]
-            if "cost_usd" in t:
-                payload["cost_usd"] = t["cost_usd"]
+            for k in ("token_in", "token_out", "cost_usd"):
+                if k in t:
+                    payload[k] = t[k]
             norm.append(payload)
         return norm
 
-    # ------------------------------------------------------------
     @staticmethod
     def _safe_stage(fn, **kwargs) -> StageResult:
-        """
-        Run a stage safely; if it throws, return a StageResult(ok=False, error=[...]).
-        If fn returns a non-StageResult (e.g., dict), coerce to StageResult(ok=True, data=...).
-        """
         try:
             r = fn(**kwargs)
             if isinstance(r, StageResult):
@@ -140,7 +119,7 @@ class Pipeline:
             tb = traceback.format_exc()
             return StageResult(ok=False, data=None, trace=None, error=[f"{e}", tb])
 
-    # ------------------------------------------------------------
+    # ------------------------------ run ------------------------------
     def run(
         self,
         *,
@@ -152,7 +131,6 @@ class Pipeline:
         traces: List[dict] = []
         details: List[str] = []
 
-        # Always push a normalized per-stage timing, even if StageResult.trace is empty
         def _fallback_trace(stage_name: str, dt_ms: float, ok: bool) -> None:
             traces.append(
                 self._mk_trace(
@@ -162,26 +140,24 @@ class Pipeline:
                 )
             )
 
-        # Normalize inputs
         schema_preview = schema_preview or ""
         clarify_answers = clarify_answers or {}
 
         try:
             # --- 1) detector ---
-            t_det0 = time.perf_counter()
+            t0 = time.perf_counter()
             questions = self.detector.detect(user_query, schema_preview)
-            det_ms = (time.perf_counter() - t_det0) * 1000.0
+            dt = (time.perf_counter() - t0) * 1000.0
             is_amb = bool(questions)
-            stage_duration_ms.labels("detector").observe(det_ms)
+            stage_duration_ms.labels("detector").observe(dt)
             traces.append(
                 self._mk_trace(
                     stage="detector",
-                    duration_ms=det_ms,
+                    duration_ms=dt,
                     summary=("ambiguous" if is_amb else "clear"),
                     notes={"ambiguous": is_amb, "questions_len": len(questions or [])},
                 )
             )
-
             if questions:
                 pipeline_runs_total.labels(status="ambiguous").inc()
                 return FinalResult(
@@ -197,15 +173,15 @@ class Pipeline:
                 )
 
             # --- 2) planner ---
-            t_pln0 = time.perf_counter()
+            t0 = time.perf_counter()
             r_plan = self._safe_stage(
                 self.planner.run, user_query=user_query, schema_preview=schema_preview
             )
-            pln_ms = (time.perf_counter() - t_pln0) * 1000.0
-            stage_duration_ms.labels("planner").observe(pln_ms)
+            dt = (time.perf_counter() - t0) * 1000.0
+            stage_duration_ms.labels("planner").observe(dt)
             traces.extend(self._trace_list(r_plan))
             if not getattr(r_plan, "trace", None):
-                _fallback_trace("planner", pln_ms, r_plan.ok)
+                _fallback_trace("planner", dt, r_plan.ok)
             if not r_plan.ok:
                 pipeline_runs_total.labels(status="error").inc()
                 return FinalResult(
@@ -221,7 +197,7 @@ class Pipeline:
                 )
 
             # --- 3) generator ---
-            t_gen0 = time.perf_counter()
+            t0 = time.perf_counter()
             r_gen = self._safe_stage(
                 self.generator.run,
                 user_query=user_query,
@@ -229,11 +205,11 @@ class Pipeline:
                 plan_text=(r_plan.data or {}).get("plan"),
                 clarify_answers=clarify_answers,
             )
-            gen_ms = (time.perf_counter() - t_gen0) * 1000.0
-            stage_duration_ms.labels("generator").observe(gen_ms)
+            dt = (time.perf_counter() - t0) * 1000.0
+            stage_duration_ms.labels("generator").observe(dt)
             traces.extend(self._trace_list(r_gen))
             if not getattr(r_gen, "trace", None):
-                _fallback_trace("generator", gen_ms, r_gen.ok)
+                _fallback_trace("generator", dt, r_gen.ok)
             if not r_gen.ok:
                 pipeline_runs_total.labels(status="error").inc()
                 return FinalResult(
@@ -251,14 +227,32 @@ class Pipeline:
             sql = (r_gen.data or {}).get("sql")
             rationale = (r_gen.data or {}).get("rationale")
 
+            # Guard: empty SQL
+            if not sql or not str(sql).strip():
+                pipeline_runs_total.labels(status="error").inc()
+                traces.append(
+                    self._mk_trace("generator", 0.0, "failed", {"reason": "empty_sql"})
+                )
+                return FinalResult(
+                    ok=False,
+                    ambiguous=False,
+                    error=True,
+                    details=["empty_sql"],
+                    questions=None,
+                    sql=None,
+                    rationale=rationale,
+                    verified=None,
+                    traces=self._normalize_traces(traces),
+                )
+
             # --- 4) safety ---
-            t_saf0 = time.perf_counter()
+            t0 = time.perf_counter()
             r_safe = self._safe_stage(self.safety.run, sql=sql)
-            saf_ms = (time.perf_counter() - t_saf0) * 1000.0
-            stage_duration_ms.labels("safety").observe(saf_ms)
+            dt = (time.perf_counter() - t0) * 1000.0
+            stage_duration_ms.labels("safety").observe(dt)
             traces.extend(self._trace_list(r_safe))
             if not getattr(r_safe, "trace", None):
-                _fallback_trace("safety", saf_ms, r_safe.ok)
+                _fallback_trace("safety", dt, r_safe.ok)
             if not r_safe.ok:
                 pipeline_runs_total.labels(status="error").inc()
                 return FinalResult(
@@ -273,99 +267,112 @@ class Pipeline:
                     traces=self._normalize_traces(traces),
                 )
 
+            # Use sanitized SQL from safety
+            sql = (r_safe.data or {}).get("sql", sql)
+
             # --- 5) executor ---
-            t_exe0 = time.perf_counter()
-            r_exec = self._safe_stage(
-                self.executor.run, sql=(r_safe.data or {}).get("sql", sql)
-            )
-            exe_ms = (time.perf_counter() - t_exe0) * 1000.0
-            stage_duration_ms.labels("executor").observe(exe_ms)
+            t0 = time.perf_counter()
+            r_exec = self._safe_stage(self.executor.run, sql=sql)
+            dt = (time.perf_counter() - t0) * 1000.0
+            stage_duration_ms.labels("executor").observe(dt)
             traces.extend(self._trace_list(r_exec))
             if not getattr(r_exec, "trace", None):
-                _fallback_trace("executor", exe_ms, r_exec.ok)
+                _fallback_trace("executor", dt, r_exec.ok)
             if not r_exec.ok and r_exec.error:
-                # executor failure is soft; collect for repair/verifier context
-                details.extend(r_exec.error)
+                details.extend(r_exec.error)  # soft: keep for repair/verifier context
 
             # --- 6) verifier ---
-            t_ver0 = time.perf_counter()
+            t0 = time.perf_counter()
             r_ver = self._safe_stage(
-                self.verifier.run, sql=sql, exec_result=(r_exec.data or {})
+                self.verifier.run,
+                sql=sql,
+                exec_result=(r_exec.data or {}),
+                adapter=getattr(
+                    self.executor, "adapter", None
+                ),  # let verifier use adapter
             )
-            ver_ms = (time.perf_counter() - t_ver0) * 1000.0
-            stage_duration_ms.labels("verifier").observe(ver_ms)
+            dt = (time.perf_counter() - t0) * 1000.0
+            stage_duration_ms.labels("verifier").observe(dt)
             traces.extend(self._trace_list(r_ver))
             if not getattr(r_ver, "trace", None):
-                _fallback_trace("verifier", ver_ms, r_ver.ok)
+                _fallback_trace("verifier", dt, r_ver.ok)
             verified = bool(r_ver.data and r_ver.data.get("verified")) or r_ver.ok
 
-            # --- 7) repair loop if verification failed ---
+            # consume repaired SQL from verifier if any
+            if r_ver.data and "sql" in r_ver.data and r_ver.data["sql"]:
+                sql = r_ver.data["sql"]
+
+            # --- 7) repair loop (if not verified) ---
             if not verified:
                 for _attempt in range(2):
                     # repair
-                    t_fix0 = time.perf_counter()
+                    t0 = time.perf_counter()
                     r_fix = self._safe_stage(
                         self.repair.run,
                         sql=sql,
                         error_msg="; ".join(details or ["unknown"]),
                         schema_preview=schema_preview,
                     )
-                    fix_ms = (time.perf_counter() - t_fix0) * 1000.0
-                    stage_duration_ms.labels("repair").observe(fix_ms)
+                    dt = (time.perf_counter() - t0) * 1000.0
+                    stage_duration_ms.labels("repair").observe(dt)
                     traces.extend(self._trace_list(r_fix))
                     if not getattr(r_fix, "trace", None):
-                        _fallback_trace("repair", fix_ms, r_fix.ok)
+                        _fallback_trace("repair", dt, r_fix.ok)
                     if not r_fix.ok:
-                        break  # give up on repair
+                        break
 
-                    # fixed SQL
+                    # update SQL
                     sql = (r_fix.data or {}).get("sql", sql)
 
-                    # safety
-                    t_saf0 = time.perf_counter()
-                    r_safe = self._safe_stage(self.safety.run, sql=sql)
-                    saf_ms2 = (time.perf_counter() - t_saf0) * 1000.0
-                    stage_duration_ms.labels("safety").observe(saf_ms2)
-                    traces.extend(self._trace_list(r_safe))
-                    if not getattr(r_safe, "trace", None):
-                        _fallback_trace("safety", saf_ms2, r_safe.ok)
-                    if not r_safe.ok:
-                        if r_safe.error:
-                            details.extend(r_safe.error)
+                    # safety again
+                    t0 = time.perf_counter()
+                    r_safe2 = self._safe_stage(self.safety.run, sql=sql)
+                    dt2 = (time.perf_counter() - t0) * 1000.0
+                    stage_duration_ms.labels("safety").observe(dt2)
+                    traces.extend(self._trace_list(r_safe2))
+                    if not getattr(r_safe2, "trace", None):
+                        _fallback_trace("safety", dt2, r_safe2.ok)
+                    if not r_safe2.ok:
+                        if r_safe2.error:
+                            details.extend(r_safe2.error)
+                        continue
+                    sql = (r_safe2.data or {}).get("sql", sql)
+
+                    # executor again
+                    t0 = time.perf_counter()
+                    r_exec2 = self._safe_stage(self.executor.run, sql=sql)
+                    dt2 = (time.perf_counter() - t0) * 1000.0
+                    stage_duration_ms.labels("executor").observe(dt2)
+                    traces.extend(self._trace_list(r_exec2))
+                    if not getattr(r_exec2, "trace", None):
+                        _fallback_trace("executor", dt2, r_exec2.ok)
+                    if not r_exec2.ok:
+                        if r_exec2.error:
+                            details.extend(r_exec2.error)
                         continue
 
-                    # executor
-                    t_exe0 = time.perf_counter()
-                    r_exec = self._safe_stage(
-                        self.executor.run, sql=(r_safe.data or {}).get("sql", sql)
+                    # verifier again
+                    t0 = time.perf_counter()
+                    r_ver2 = self._safe_stage(
+                        self.verifier.run,
+                        sql=sql,
+                        exec_result=(r_exec2.data or {}),
+                        adapter=getattr(self.executor, "adapter", None),
                     )
-                    exe_ms2 = (time.perf_counter() - t_exe0) * 1000.0
-                    stage_duration_ms.labels("executor").observe(exe_ms2)
-                    traces.extend(self._trace_list(r_exec))
-                    if not getattr(r_exec, "trace", None):
-                        _fallback_trace("executor", exe_ms2, r_exec.ok)
-                    if not r_exec.ok:
-                        if r_exec.error:
-                            details.extend(r_exec.error)
-                        continue
-
-                    # verifier
-                    t_ver0 = time.perf_counter()
-                    r_ver = self._safe_stage(
-                        self.verifier.run, sql=sql, exec_result=(r_exec.data or {})
-                    )
-                    ver_ms2 = (time.perf_counter() - t_ver0) * 1000.0
-                    stage_duration_ms.labels("verifier").observe(ver_ms2)
-                    traces.extend(self._trace_list(r_ver))
-                    if not getattr(r_ver, "trace", None):
-                        _fallback_trace("verifier", ver_ms2, r_ver.ok)
+                    dt2 = (time.perf_counter() - t0) * 1000.0
+                    stage_duration_ms.labels("verifier").observe(dt2)
+                    traces.extend(self._trace_list(r_ver2))
+                    if not getattr(r_ver2, "trace", None):
+                        _fallback_trace("verifier", dt2, r_ver2.ok)
                     verified = (
-                        bool(r_ver.data and r_ver.data.get("verified")) or r_ver.ok
+                        bool(r_ver2.data and r_ver2.data.get("verified")) or r_ver2.ok
                     )
+                    if r_ver2.data and "sql" in r_ver2.data and r_ver2.data["sql"]:
+                        sql = r_ver2.data["sql"]
                     if verified:
                         break
 
-            # --- 8) fallback: verifier silent but executor succeeded ---
+            # --- 8) optional soft auto-verify (executor success, no details) ---
             if (verified is None or not verified) and not details:
                 any_exec_ok = any(
                     t.get("stage") == "executor"
@@ -385,13 +392,24 @@ class Pipeline:
 
             # --- 9) finalize ---
             has_errors = bool(details)
-            ok = bool(verified) and not has_errors
-            err = has_errors and not bool(verified)
+            need_ver = bool(self.require_verification)
 
-            if ok:
-                pipeline_runs_total.labels(status="ok").inc()
+            # base success condition
+            final_ok_by_verifier = bool(verified)
+            base_ok = (
+                bool(sql) and not has_errors and (final_ok_by_verifier or not need_ver)
+            )
+            ok = base_ok
+            err = (not ok) and has_errors
+
+            # align `verified` with baseline semantics:
+            # if verification is NOT required and pipeline is ok, report verified=True
+            if not need_ver and ok and not final_ok_by_verifier:
+                verified_final = True
             else:
-                pipeline_runs_total.labels(status="error").inc()
+                verified_final = bool(verified)
+
+            pipeline_runs_total.labels(status=("ok" if ok else "error")).inc()
 
             traces.append(
                 self._mk_trace(
@@ -399,8 +417,9 @@ class Pipeline:
                     duration_ms=0.0,
                     summary="finalize",
                     notes={
-                        "final_verified": bool(verified),
+                        "final_verified": bool(verified_final),
                         "details_len": len(details),
+                        "need_verification": need_ver,
                     },
                 )
             )
@@ -412,18 +431,18 @@ class Pipeline:
                 details=details or None,
                 sql=sql,
                 rationale=rationale,
-                verified=verified,
+                verified=verified_final,
                 questions=None,
                 traces=self._normalize_traces(traces),
             )
 
         except Exception:
-            # Any unexpected crash
             pipeline_runs_total.labels(status="error").inc()
+            # bubble up to make failures visible in tests and logs
             raise
 
         finally:
-            # Always record total latency even on early-return / exceptions
+            # Always record total latency, even on early return/exception
             stage_duration_ms.labels("pipeline_total").observe(
                 (time.perf_counter() - t_all0) * 1000.0
             )
