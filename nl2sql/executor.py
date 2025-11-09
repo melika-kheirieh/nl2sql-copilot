@@ -16,7 +16,11 @@ class Executor:
             trace = StageTrace(
                 stage=self.name,
                 duration_ms=(time.perf_counter() - t0) * 1000,
-                notes={"row_count": len(rows), "col_count": len(cols)},
+                notes={
+                    "row_count": len(rows),
+                    "col_count": len(cols),
+                    "sql_length": len(sql or ""),
+                },
             )
             return StageResult(
                 ok=True, data={"rows": rows, "columns": cols}, trace=trace
@@ -25,6 +29,10 @@ class Executor:
             trace = StageTrace(
                 stage=self.name,
                 duration_ms=(time.perf_counter() - t0) * 1000,
-                notes={"error": str(e)},
+                notes={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "sql_length": len(sql or ""),
+                },
             )
             return StageResult(ok=False, data=None, trace=trace, error=[str(e)])

@@ -37,7 +37,11 @@ def _resolve_api_config() -> tuple[str, str, str]:
 class OpenAIProvider(LLMProvider):
     """OpenAI LLM provider implementation."""
 
-    provider_id = "openai"
+    PROVIDER_ID = "openai"
+
+    def get_last_usage(self) -> dict[str, Any]:
+        """Return metadata of the last LLM call (tokens, cost, sql_length, kind)."""
+        return dict(self._last_usage)
 
     def __init__(self) -> None:
         """Initialize OpenAI client with config from environment."""
@@ -46,6 +50,8 @@ class OpenAIProvider(LLMProvider):
         os.environ["OPENAI_BASE_URL"] = base_url
         self.client = OpenAI()
         self.model = model
+        # last call usage/metadata for tracing
+        self._last_usage: dict[str, Any] = {}
 
     def plan(
         self, *, user_query: str, schema_preview: str
@@ -94,8 +100,20 @@ Create a step-by-step plan to answer this question with SQL."""
             prompt_tokens = usage.prompt_tokens
             completion_tokens = usage.completion_tokens
             cost = self._estimate_cost(usage)
+            self._last_usage = {
+                "kind": "plan",
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cost_usd": cost,
+            }
             return (msg, prompt_tokens, completion_tokens, cost)
         else:
+            self._last_usage = {
+                "kind": "plan",
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_usd": 0.0,
+            }
             return (msg, 0, 0, 0.0)
 
     def generate_sql(
@@ -197,12 +215,27 @@ Now generate the SQL for the given question:"""
         if not sql:
             raise ValueError("LLM returned empty 'sql'")
 
+        sql_length = len(sql)
         if usage:
             prompt_tokens = usage.prompt_tokens
             completion_tokens = usage.completion_tokens
             cost = self._estimate_cost(usage)
+            self._last_usage = {
+                "kind": "generate",
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cost_usd": cost,
+                "sql_length": sql_length,
+            }
             return (sql, rationale, prompt_tokens, completion_tokens, cost)
         else:
+            self._last_usage = {
+                "kind": "generate",
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_usd": 0.0,
+                "sql_length": sql_length,
+            }
             return (sql, rationale, 0, 0, 0.0)
 
     def _simplify_sql(self, sql: str) -> str:
@@ -307,8 +340,22 @@ Return the corrected SQL (keep it simple):"""
             prompt_tokens = usage.prompt_tokens
             completion_tokens = usage.completion_tokens
             cost = self._estimate_cost(usage)
+            self._last_usage = {
+                "kind": "repair",
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cost_usd": cost,
+                "sql_length": len(fixed_sql),
+            }
             return (fixed_sql, prompt_tokens, completion_tokens, cost)
         else:
+            self._last_usage = {
+                "kind": "repair",
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_usd": 0.0,
+                "sql_length": len(fixed_sql),
+            }
             return (fixed_sql, 0, 0, 0.0)
 
     def _estimate_cost(self, usage: Any) -> float:

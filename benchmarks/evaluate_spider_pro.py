@@ -206,6 +206,45 @@ def evaluate_sql(pred: str, gold: str, db: Path) -> Dict[str, float]:
     return {"em": em, "sm": sm, "exec": exec_acc}
 
 
+# ---------------------- Trace flatten helpers -------------------
+def _flatten_trace_entry(d: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(d or {})
+    notes = out.pop("notes", {}) or {}
+    # promote selected keys to top-level for easier analysis
+    for k in (
+        "tokens_in",
+        "tokens_out",
+        "cost_usd",
+        "sql_length",
+        "row_count",
+        "verified",
+        "error_type",
+        "repair_attempts",
+        "skipped",
+        "col_count",
+    ):
+        if k in notes:
+            out[k] = notes[k]
+    if notes:
+        out["notes"] = notes
+    return out
+
+
+def _per_stage_ms(trace_list: List[Dict[str, Any]]) -> Dict[str, float]:
+    acc = {s: 0.0 for s in STAGES}
+    cnt = {s: 0 for s in STAGES}
+    for t in trace_list:
+        s = t.get("stage")
+        if s in acc:
+            ms = t.get("duration_ms", t.get("ms", 0.0))
+            try:
+                acc[s] += float(ms)
+                cnt[s] += 1
+            except Exception:
+                pass
+    return {s: round(acc[s] / cnt[s], 2) if cnt[s] else 0.0 for s in STAGES}
+
+
 # ---------------------- Dataclass + runner ------------------
 
 

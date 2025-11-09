@@ -1,26 +1,27 @@
 from __future__ import annotations
-import time
-from nl2sql.types import StageResult, StageTrace
-from adapters.llm.base import LLMProvider
+
+from typing import Dict, Any
 
 
 class Planner:
-    name = "planner"
+    """Planner wrapper around the LLM provider.
 
-    def __init__(self, llm: LLMProvider) -> None:
+    The factory constructs it with `Planner(llm=llm)`, so we accept `llm` here.
+    """
+
+    def __init__(self, *, llm, model_id: str | None = None) -> None:
         self.llm = llm
+        self.model_id = model_id or getattr(llm, "model", "unknown")
 
-    def run(self, *, user_query: str, schema_preview: str) -> StageResult:
-        t0 = time.perf_counter()
-        plan_text, t_in, t_out, cost = self.llm.plan(
+    def run(self, *, user_query: str, schema_preview: str) -> Dict[str, Any]:
+        plan_text, pin, pout, cost = self.llm.plan(
             user_query=user_query, schema_preview=schema_preview
         )
-        trace = StageTrace(
-            stage=self.name,
-            duration_ms=(time.perf_counter() - t0) * 1000,
-            token_in=t_in,
-            token_out=t_out,
-            cost_usd=cost,
-            notes={"len_plan": len(plan_text)},
-        )
-        return StageResult(ok=True, data={"plan": plan_text}, trace=trace)
+        return {
+            "plan": plan_text,
+            "usage": {
+                "prompt_tokens": pin,
+                "completion_tokens": pout,
+                "cost_usd": cost,
+            },
+        }
