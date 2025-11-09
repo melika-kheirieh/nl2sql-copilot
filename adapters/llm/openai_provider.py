@@ -147,6 +147,7 @@ CRITICAL RULES:
 6. Use lowercase for SQL keywords (select, from, where, etc.)
 7. Do not add unnecessary parentheses or formatting
 8. Match exact column and table names from the schema (case-sensitive)
+9. NEVER return empty SQL. If unsure, return the simplest valid SQL that answers the question.
 
 IMPORTANT:
 - For counting all rows: Use COUNT(*) not COUNT(column_name)

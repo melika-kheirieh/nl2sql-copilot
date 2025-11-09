@@ -1,6 +1,0 @@
-db_id,query,ok,em,sm,exec_acc,latency_ms
-concert_singer,"How many singers do we have?",✅,1.0,1.0,1.0,11836
-concert_singer,"What is the total number of singers?",✅,1.0,1.0,1.0,10414
-concert_singer,"Show name, country, age for all singers ordered by age from the oldest to the youngest.",✅,0.0,0.0,0.0,0
-concert_singer,"What are the names, countries, and ages for every singer in descending order of age?",✅,0.0,1.0,1.0,13807
-concert_singer,"What is the average, minimum, and maximum age of all singers from France?",✅,0.0,1.0,1.0,13396
