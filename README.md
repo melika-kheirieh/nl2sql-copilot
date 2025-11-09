@@ -1,3 +1,19 @@
+---
+title: NL2SQL Copilot — Mock Demo
+emoji: 🧩
+colorFrom: indigo
+colorTo: blue
+sdk: gradio
+app_file: app/main.py
+python_version: 3.10
+pinned: false
+license: mit
+tags:
+  - text-to-sql
+  - ai-engineering
+  - demo
+  - gradio
+---
 # 🧩 NL2SQL Copilot
 
 [![CI](https://github.com/melika-kheirieh/nl2sql-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/melika-kheirieh/nl2sql-copilot/actions/workflows/ci.yml)
