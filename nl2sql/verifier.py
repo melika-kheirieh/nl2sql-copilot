@@ -18,6 +18,7 @@ class Verifier:
     def verify(self, sql: str, *, adapter: Any | None = None) -> StageResult:
         t0 = time.perf_counter()
         notes: Dict[str, Any] = {}
+        reason = "ok"  # new field
 
         s = (sql or "").strip()
         sl = s.lower()
@@ -31,19 +32,12 @@ class Verifier:
             notes["has_from"] = has_from
 
             if not has_select or not has_from:
-                dt = int(round((time.perf_counter() - t0) * 1000.0))
-                notes["verified"] = False
-                trace = StageTrace(
-                    stage="verifier",
-                    duration_ms=dt,
-                    summary="failed",
-                    notes=notes,
-                )
-                return StageResult(
-                    ok=False,
-                    data={"verified": False},
-                    trace=trace,
+                reason = "parse-error"
+                return self._fail(
+                    t0,
+                    notes,
                     error=["parse_error"],
+                    reason=reason,
                 )
 
             # --- semantic sanity: aggregation without GROUP BY (unless allowed) ---
@@ -77,41 +71,27 @@ class Verifier:
                 and (not has_over)
                 and (not has_distinct)
             ):
-                dt = int(round((time.perf_counter() - t0) * 1000.0))
-                notes["verified"] = False
-                trace = StageTrace(
-                    stage="verifier",
-                    duration_ms=dt,
-                    summary="failed",
-                    notes=notes,
-                )
-                return StageResult(
-                    ok=False,
-                    data={"verified": False},
-                    trace=trace,
+                reason = "aggregation-without-groupby"
+                return self._fail(
+                    t0,
+                    notes,
                     error=["aggregation_without_group_by"],
+                    reason=reason,
                 )
 
             # --- execution-error sentinel for tests ---
             if "imaginary_table" in sl:
-                dt = int(round((time.perf_counter() - t0) * 1000.0))
-                notes["verified"] = False
-                trace = StageTrace(
-                    stage="verifier",
-                    duration_ms=dt,
-                    summary="failed",
-                    notes=notes,
-                )
-                return StageResult(
-                    ok=False,
-                    data={"verified": False},
-                    trace=trace,
+                reason = "exec-error"
+                return self._fail(
+                    t0,
+                    notes,
                     error=["exec_error: no such table: imaginary_table"],
+                    reason=reason,
                 )
 
             # --- pass ---
             dt = int(round((time.perf_counter() - t0) * 1000.0))
-            notes["verified"] = True
+            notes.update({"verified": True, "reason": reason})
             trace = StageTrace(
                 stage="verifier",
                 duration_ms=dt,
@@ -121,21 +101,40 @@ class Verifier:
             return StageResult(ok=True, data={"verified": True}, trace=trace)
 
         except Exception as e:
-            dt = int(round((time.perf_counter() - t0) * 1000.0))
-            notes["verified"] = False
-            notes["exception_type"] = type(e).__name__
-            trace = StageTrace(
-                stage="verifier",
-                duration_ms=dt,
-                summary="failed",
-                notes=notes,
-            )
-            return StageResult(
-                ok=False,
-                data={"verified": False},
-                trace=trace,
+            reason = "exception"
+            return self._fail(
+                t0,
+                notes,
                 error=[str(e)],
+                reason=reason,
+                exc_type=type(e).__name__,
             )
+
+    def _fail(
+        self,
+        t0: float,
+        notes: Dict[str, Any],
+        *,
+        error: list[str],
+        reason: str,
+        exc_type: str | None = None,
+    ) -> StageResult:
+        dt = int(round((time.perf_counter() - t0) * 1000.0))
+        notes.update({"verified": False, "reason": reason})
+        if exc_type:
+            notes["exception_type"] = exc_type
+        trace = StageTrace(
+            stage="verifier",
+            duration_ms=dt,
+            summary="failed",
+            notes=notes,
+        )
+        return StageResult(
+            ok=False,
+            data={"verified": False},
+            trace=trace,
+            error=error,
+        )
 
     def run(
         self, *, sql: str, exec_result: Dict[str, Any], adapter: Any = None
