@@ -74,12 +74,14 @@ class Pipeline:
         duration_ms: float,
         summary: str,
         notes: Optional[Dict[str, Any]] = None,
+        skipped: bool = False,
     ) -> dict:
         return {
             "stage": stage,
             "duration_ms": float(duration_ms),
             "summary": summary,
             "notes": notes or {},
+            "skipped": bool(skipped),
         }
 
     @staticmethod
@@ -102,7 +104,17 @@ class Pipeline:
                 "summary": summary,
                 "notes": notes,
             }
-            for k in ("token_in", "token_out", "cost_usd"):
+            for k in (
+                "token_in",
+                "token_out",
+                "cost_usd",
+                "sql_length",
+                "row_count",
+                "verified",
+                "error_type",
+                "repair_attempts",
+                "skipped",
+            ):
                 if k in t:
                     payload[k] = t[k]
             norm.append(payload)
@@ -231,7 +243,12 @@ class Pipeline:
             if not sql or not str(sql).strip():
                 pipeline_runs_total.labels(status="error").inc()
                 traces.append(
-                    self._mk_trace("generator", 0.0, "failed", {"reason": "empty_sql"})
+                    self._mk_trace(
+                        "generator",
+                        0.0,
+                        "failed",
+                        {"reason": "empty_sql", "error_type": "EmptySQL"},
+                    )
                 )
                 return FinalResult(
                     ok=False,
@@ -318,6 +335,8 @@ class Pipeline:
                     traces.extend(self._trace_list(r_fix))
                     if not getattr(r_fix, "trace", None):
                         _fallback_trace("repair", dt, r_fix.ok)
+                    # annotate attempt
+                    traces[-1]["notes"]["attempt"] = _attempt + 1
                     if not r_fix.ok:
                         break
 

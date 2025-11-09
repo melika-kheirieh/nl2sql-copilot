@@ -12,6 +12,14 @@ class StageTrace:
     token_out: Optional[int] = None
     cost_usd: Optional[float] = None
 
+    # Enriched fields
+    sql_length: Optional[int] = None
+    row_count: Optional[int] = None
+    verified: Optional[bool] = None
+    error_type: Optional[str] = None
+    repair_attempts: Optional[int] = None
+    skipped: bool = False
+
 
 @dataclass(frozen=True)
 class StageResult:
