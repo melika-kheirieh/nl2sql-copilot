@@ -1,8 +1,7 @@
 from __future__ import annotations
-
 import re
 import time
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, List, Optional, Dict, Tuple
 
 import sqlglot
 from sqlglot import expressions as exp
@@ -10,24 +9,65 @@ from sqlglot import expressions as exp
 from nl2sql.types import StageResult, StageTrace
 from nl2sql.metrics import (
     verifier_checks_total,
-    stage_duration_ms,
     verifier_failures_total,
 )
 
 
 def _ms(t0: float) -> int:
+    """Return elapsed milliseconds since t0, as int."""
     return int((time.perf_counter() - t0) * 1000)
 
 
+# ---------------- Small Levenshtein distance for schema matching ----------------
+def _lev(a: str, b: str) -> int:
+    n = len(b)
+
+    dp = list(range(n + 1))
+    for i, ca in enumerate(a, 1):
+        prev, dp[0] = dp[0], i
+        for j, cb in enumerate(b, 1):
+            cur = min(
+                dp[j] + 1,  # delete
+                dp[j - 1] + 1,  # insert
+                prev + (0 if ca == cb else 1),  # replace
+            )
+            prev, dp[j] = dp[j], cur
+    return dp[n]
+
+
+def _closest(name: str, candidates: List[str]) -> Tuple[str, int]:
+    """Find the closest match (by edit distance) for a given name."""
+    best, dist = name, 10**9
+    for c in candidates:
+        d = _lev(name.lower(), c.lower())
+        if d < dist:
+            best, dist = c, d
+    return best, dist
+
+
+def _maybe_singular(plural: str, tables: List[str]) -> Optional[str]:
+    """Simple singularization heuristic: 'singers' -> 'singer'."""
+    if plural.endswith("s"):
+        cand = plural[:-1]
+        if cand in tables:
+            return cand
+    return None
+
+
+# ---------------- Verifier with schema-aware repair ----------------
 class Verifier:
     name = "verifier"
 
-    # Textual fallback: scan for common aggregate calls
+    # Aggregate call detector used by both AST and regex fallbacks
     _AGG_CALL_RE = re.compile(r"\b(count|sum|avg|min|max)\s*\(", re.IGNORECASE)
 
-    # ----------------------- AST helpers (version-friendly) --------------------
+    # Fast token sanity: require SELECT and FROM to exist in the cleaned SQL
+    _REQ_SELECT = re.compile(r"\bselect\b", re.IGNORECASE)
+    _REQ_FROM = re.compile(r"\bfrom\b", re.IGNORECASE)
+
+    # ---------- AST helpers ----------
     def _walk(self, node: exp.Expression) -> Iterable[exp.Expression]:
-        """Non-recursive DFS over sqlglot Expression tree (avoid private APIs)."""
+        """Depth-first traversal of a SQLGlot AST."""
         stack = [node]
         while stack:
             cur = stack.pop()
@@ -43,6 +83,7 @@ class Verifier:
                                 stack.append(it)
 
     def _first_select(self, tree: exp.Expression) -> Optional[exp.Select]:
+        """Return the first SELECT node from the AST (if any)."""
         for n in self._walk(tree):
             if isinstance(n, exp.Select):
                 return n
@@ -50,27 +91,22 @@ class Verifier:
 
     def _has_group_by(self, tree: exp.Expression) -> bool:
         sel = self._first_select(tree)
-        if not sel:
-            return False
-        # sqlglot stores GROUP BY on Select.group
-        return bool(getattr(sel, "group", None))
+        return bool(getattr(sel, "group", None)) if sel else False
 
     def _is_distinct_projection(self, tree: exp.Expression) -> bool:
         sel = self._first_select(tree)
         if not sel:
             return False
-        # DISTINCT may appear as Select.distinct or a Distinct node
         if getattr(sel, "distinct", None):
             return True
         return any(isinstance(n, exp.Distinct) for n in self._walk(sel))
 
     def _has_windowed_aggregate(self, tree: exp.Expression) -> bool:
-        # If there is any OVER(...) window, aggregates without GROUP BY can be legitimate
         return any(isinstance(n, exp.Window) for n in self._walk(tree))
 
     def _expr_contains_agg(self, node: exp.Expression) -> bool:
-        """True if subtree contains an aggregate call (robust across sqlglot versions)."""
-        # Build aggregate classes dynamically to avoid attr errors and fixed-length tuples
+        """Return True if an expression contains an aggregate function."""
+        agg_names = {"count", "sum", "avg", "min", "max"}
         agg_type_names = (
             "Count",
             "Sum",
@@ -81,26 +117,24 @@ class Verifier:
             "ArrayAgg",
             "StringAgg",
         )
-        agg_types_list: list[type] = []
-        for name in agg_type_names:
-            t = getattr(exp, name, None)
-            if isinstance(t, type):
-                agg_types_list.append(t)
-        AGG_TYPES: tuple[type, ...] = tuple(agg_types_list)
+        agg_types = tuple(
+            t
+            for t in (getattr(exp, n, None) for n in agg_type_names)
+            if isinstance(t, type)
+        )
 
-        # 1) Class-based check (if we found any known aggregate classes)
-        if AGG_TYPES and any(isinstance(n, AGG_TYPES) for n in self._walk(node)):
+        # AST type-based check (preferred)
+        if agg_types and any(isinstance(n, agg_types) for n in self._walk(node)):
             return True
 
-        # 2) Fallback: generic function nodes with aggregate names
+        # Fallback: function-like name check
         Anonymous = getattr(exp, "Anonymous", None)
         func_like = (exp.Func,) + ((Anonymous,) if isinstance(Anonymous, type) else ())
-        AGG_NAMES = {"count", "sum", "avg", "min", "max"}
 
-        def _func_name(n: exp.Expression) -> str:
-            name = getattr(n, "name", None)
-            if isinstance(name, str) and name:
-                return name.lower()
+        def _fname(n: exp.Expression) -> str:
+            nm = getattr(n, "name", None)
+            if isinstance(nm, str) and nm:
+                return nm.lower()
             this = getattr(n, "this", None)
             if isinstance(this, str):
                 return this.lower()
@@ -110,82 +144,138 @@ class Verifier:
             return (str(this) or "").lower()
 
         for n in self._walk(node):
-            if isinstance(n, func_like) and _func_name(n) in AGG_NAMES:
-                return True
-
-        return False
-
-    def _has_nonagg_column(self, node: exp.Expression) -> bool:
-        """Subtree contains a column reference that is NOT inside an aggregate."""
-        # Check if there are any columns in this expression
-        columns = [n for n in self._walk(node) if isinstance(n, exp.Column)]
-        if not columns:
-            return False
-
-        # Check if all columns are inside aggregates
-        for col in columns:
-            # Walk up from column to see if it's inside an aggregate
-            # is_in_agg = False
-            # For simplicity, check if the entire expression contains both column and aggregate
-            # A more precise check would require parent tracking
-            if self._expr_contains_agg(node):
-                # This is a simplified check - if the node has both columns and aggregates,
-                # we need more complex logic to determine if columns are outside aggregates
-                return True
-            else:
-                # No aggregates, so if there are columns, they're non-aggregate
+            if isinstance(n, func_like) and _fname(n) in agg_names:
                 return True
         return False
 
-    # ----------------------- Textual fallback helpers -------------------------
     def _clean_sql_for_fn_scan(self, sql: str) -> str:
-        """Remove comments/strings so regex won't be fooled."""
+        """Normalize SQL before scanning for function names or keywords."""
         s = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)  # block comments
         s = re.sub(r"--.*?$", " ", s, flags=re.MULTILINE)  # line comments
         s = re.sub(
             r"('([^']|'')*'|\"([^\"]|\"\")*\"|`[^`]*`)", " ", s
-        )  # quoted strings / idents
+        )  # quoted strings
         s = re.sub(r"\s+", " ", s).strip()
         return s
 
-    # ----------------------- Adapter result helpers ---------------------------
-    def _extract_ok(self, exec_result: Any) -> Optional[bool]:
-        if isinstance(exec_result, dict):
-            v = exec_result.get("ok")
-            if isinstance(v, bool):
-                return v
+    # ---------------- Schema-Guard Repair ----------------
+    def _schema_dict(self, adapter: Any) -> Optional[Dict[str, List[str]]]:
+        """Fetch schema dict {table: [columns]} from adapter if available."""
+        if not adapter:
+            return None
+        get = getattr(adapter, "schema_dict", None)
+        if callable(get):
+            try:
+                d = get()
+                if isinstance(d, dict):
+                    return {str(k): list(v) for k, v in d.items()}
+            except Exception:
+                return None
         return None
 
-    def _extract_error(self, exec_result: Any) -> Optional[str]:
-        if isinstance(exec_result, dict):
-            for k in ("error", "message", "detail"):
-                if k in exec_result and exec_result[k]:
-                    return str(exec_result[k])
-        return None
+    def _repair_with_schema(
+        self, sql: str, schema: Dict[str, List[str]]
+    ) -> Tuple[str, bool, List[str]]:
+        """Try to fix table/column names using schema similarity (singularize + closest edit-distance <= 2)."""
+        notes: List[str] = []
+        try:
+            ast = sqlglot.parse_one(sql)
+        except Exception as e:
+            return sql, False, [f"parse_error:{e!s}"]
 
-    # ----------------------------- Main entry ---------------------------------
-    def verify(self, sql: str, *, adapter: Any) -> StageResult:
+        tables = list(schema.keys())
+        changed = False
+
+        # Fix table names
+        def _fix_table(node: exp.Expression) -> exp.Expression:
+            nonlocal changed
+            if isinstance(node, exp.Table):
+                orig = node.name
+                if orig in schema:
+                    return node
+                s1 = _maybe_singular(orig, tables)
+                if s1:
+                    changed = True
+                    return exp.Table(this=sqlglot.to_identifier(s1))
+                best, dist = _closest(orig, tables)
+                if dist <= 2:
+                    changed = True
+                    return exp.Table(this=sqlglot.to_identifier(best))
+            return node
+
+        ast = ast.transform(_fix_table)
+
+        # Fix column names
+        def _fix_col(node: exp.Expression) -> exp.Expression:
+            nonlocal changed
+            if isinstance(node, exp.Column):
+                name = node.name
+                if not name:
+                    return node
+                tbl = node.table
+                if tbl and tbl in schema:
+                    candidates = schema[tbl]
+                else:
+                    candidates = [c for cols in schema.values() for c in cols]
+                if name in candidates:
+                    return node
+                best, dist = _closest(name, candidates) if candidates else (name, 99)
+                if dist <= 2:
+                    changed = True
+                    node.set("this", sqlglot.to_identifier(best))
+            return node
+
+        ast = ast.transform(_fix_col)
+
+        if not changed:
+            return sql, True, notes
+
+        try:
+            repaired = ast.sql(dialect="sqlite")
+        except Exception as e:
+            return sql, False, notes + [f"rebuild_error:{e!s}"]
+
+        notes.append("schema_guard_repair")
+        return repaired, True, notes
+
+    # ---------------- Main verifier logic ----------------
+    def verify(
+        self, sql: str, *, exec_result: Any = None, adapter: Any = None
+    ) -> StageResult:
+        """
+        Verify syntax, basic semantics, and optionally schema correctness and preview-execution.
+
+        Returns:
+          StageResult with:
+            - ok: boolean
+            - data: may include {"verified": True, "sql": <repaired_sql>}
+            - trace: StageTrace(stage="verifier", duration_ms=...)
+        """
         t0 = time.perf_counter()
         issues: List[str] = []
+        repaired_sql = None
 
-        # 1) Parse - Check for errors in the parsed result
+        # 0) Fast token sanity: must contain SELECT and FROM (handles typos like SELCT/FRM).
+        sql_scan = self._clean_sql_for_fn_scan(sql)
+        if not self._REQ_SELECT.search(sql_scan) or not self._REQ_FROM.search(sql_scan):
+            verifier_checks_total.labels(ok="false").inc()
+            verifier_failures_total.labels(reason="parse_error").inc()
+            return StageResult(
+                ok=False,
+                error=["parse_error"],
+                trace=StageTrace(stage=self.name, duration_ms=_ms(t0)),
+            )
+
+        # 1) Syntax validation via sqlglot
         try:
-            tree = sqlglot.parse_one(sql, read=None)  # autodetect dialect
-
-            # Check if the parse actually succeeded
+            tree = sqlglot.parse_one(sql, read=None)
             if tree is None:
                 return StageResult(
                     ok=False,
                     error=["parse_error"],
                     trace=StageTrace(stage=self.name, duration_ms=_ms(t0)),
                 )
-
-            # sqlglot may parse broken SQL as an "Unknown" or "Command" type
-            # Check if we got a proper SQL statement type
             tree_type = type(tree).__name__
-
-            # Check for common sqlglot error indicators
-            # When sqlglot can't parse properly, it often creates Command or Unknown nodes
             if tree_type in ("Command", "Unknown"):
                 verifier_checks_total.labels(ok="false").inc()
                 verifier_failures_total.labels(reason="parse_error").inc()
@@ -194,36 +284,6 @@ class Verifier:
                     error=["parse_error"],
                     trace=StageTrace(stage=self.name, duration_ms=_ms(t0)),
                 )
-
-            # Also check if the tree has errors attribute (some versions of sqlglot)
-            if hasattr(tree, "errors") and tree.errors:
-                verifier_checks_total.labels(ok="false").inc()
-                verifier_failures_total.labels(reason="parse_error").inc()
-                return StageResult(
-                    ok=False,
-                    error=["parse_error"],
-                    trace=StageTrace(stage=self.name, duration_ms=_ms(t0)),
-                )
-
-            # Additional check: if it's not a recognized DML/DQL statement
-            valid_types = ("Select", "With", "Union", "Intersect", "Except", "Values")
-            if tree_type not in valid_types:
-                # This might be a parse error disguised as a different statement type
-                # Let's check if it looks like it should be a SELECT
-                sql_lower = sql.lower().strip()
-                if any(
-                    sql_lower.startswith(kw)
-                    for kw in ["selct", "slect", "selet", "seelct"]
-                ):
-                    # Common misspellings of SELECT
-                    verifier_checks_total.labels(ok="false").inc()
-                    verifier_failures_total.labels(reason="parse_error").inc()
-                    return StageResult(
-                        ok=False,
-                        error=["parse_error"],
-                        trace=StageTrace(stage=self.name, duration_ms=_ms(t0)),
-                    )
-
         except Exception:
             verifier_checks_total.labels(ok="false").inc()
             verifier_failures_total.labels(reason="parse_error").inc()
@@ -233,29 +293,22 @@ class Verifier:
                 trace=StageTrace(stage=self.name, duration_ms=_ms(t0)),
             )
 
-        # 2) Semantic checks (AST-first)
+        # 2) Semantic rule: avoid aggregate + non-aggregate mix without GROUP BY (unless DISTINCT/window)
         try:
             sel = self._first_select(tree)
             if sel:
                 has_group = self._has_group_by(tree)
                 has_window = self._has_windowed_aggregate(tree)
                 is_distinct = self._is_distinct_projection(tree)
-
                 select_items = list(getattr(sel, "expressions", []) or [])
                 any_agg = any(self._expr_contains_agg(it) for it in select_items)
-
-                # More precise check for non-aggregate columns
-                any_nonagg_col = False
-                for item in select_items:
-                    # Check if this select item has columns but no aggregates
-                    has_cols = any(isinstance(n, exp.Column) for n in self._walk(item))
-                    has_aggs = self._expr_contains_agg(item)
-                    if has_cols and not has_aggs:
-                        any_nonagg_col = True
-                        break
-
-                # Core rule: aggregate + non-aggregate column without GROUP BY is an issue,
-                # unless DISTINCT or windowed aggregate makes it legitimate.
+                any_nonagg_col = any(
+                    (
+                        any(isinstance(n, exp.Column) for n in self._walk(it))
+                        and not self._expr_contains_agg(it)
+                    )
+                    for it in select_items
+                )
                 if (
                     any_agg
                     and any_nonagg_col
@@ -264,72 +317,111 @@ class Verifier:
                     verifier_failures_total.labels(reason="semantic_error").inc()
                     issues.append("aggregation_without_group_by")
         except Exception as e:
-            # Don't crash the verifier; surface a soft issue and let fallback run
             verifier_failures_total.labels(reason="semantic_error").inc()
             issues.append(f"semantic_check_error:{e!s}")
-
-        # 3) Fallback textual scan — only if AST didn't already flag
-        if not any("aggregation_without_group_by" in i for i in issues):
-            try:
-                cleaned = self._clean_sql_for_fn_scan(sql)
-                has_agg_call = bool(self._AGG_CALL_RE.search(cleaned))
-                has_group_kw = re.search(r"\bgroup\s+by\b", cleaned, re.IGNORECASE)
-                has_over_kw = re.search(r"\bover\s*\(", cleaned, re.IGNORECASE)
-                has_distinct_kw = re.search(
-                    r"\bselect\s+distinct\b", cleaned, re.IGNORECASE
+        # 2b) Regex fallback for aggregate + non-aggregate without GROUP BY.
+        #     Skip if DISTINCT or any WINDOW (OVER ...) is present in the SELECT list.
+        try:
+            low = sql_scan.lower()
+            if "group by" not in low and "distinct" not in low:
+                m = re.search(
+                    r"select\s+(?P<sel>.+?)\s+from\b",
+                    sql_scan,
+                    flags=re.IGNORECASE | re.DOTALL,
                 )
-
-                if has_agg_call and not (
-                    has_group_kw or has_over_kw or has_distinct_kw
-                ):
-                    m_sel = re.search(
-                        r"\bselect\s+(?P<sel>.+?)\s+\bfrom\b",
-                        cleaned,
-                        re.IGNORECASE | re.DOTALL,
-                    )
-                    if m_sel:
-                        select_list = m_sel.group("sel")
-                        # a comma strongly suggests mixing aggregate and non-aggregate in projection
-                        if "," in select_list:
+                if m:
+                    sel_clause = m.group("sel")
+                    # If window functions are present, allow (COUNT(*) OVER (...), etc.)
+                    if re.search(r"\bover\b", sel_clause, flags=re.IGNORECASE):
+                        pass  # windowed aggregates are acceptable without GROUP BY
+                    else:
+                        has_agg = bool(self._AGG_CALL_RE.search(sel_clause))
+                        # Heuristic: presence of a comma OR a bare identifier besides pure aggregate-only select
+                        has_bare_col = "," in sel_clause or (
+                            bool(re.search(r"\b[a-zA-Z_][\w.]*\b", sel_clause))
+                            and not re.fullmatch(
+                                r"\s*(count|sum|avg|min|max)\s*\([^)]*\)\s*",
+                                sel_clause,
+                                flags=re.IGNORECASE,
+                            )
+                        )
+                        if (
+                            has_agg
+                            and has_bare_col
+                            and "aggregation_without_group_by" not in issues
+                        ):
                             verifier_failures_total.labels(
-                                reason="agg_without_group_by"
+                                reason="semantic_error"
                             ).inc()
                             issues.append("aggregation_without_group_by")
-            except Exception:
-                # ignore fallback errors
-                pass
+        except Exception:
+            # Non-fatal; AST path already attempted.
+            pass
 
-        # 4) Optional: cheap preview execution (adapter may be a stub in tests)
+        # 3) Schema-based auto-repair (optional)
+        schema = self._schema_dict(adapter)
+        if schema:
+            fixed, ok_fix, notes = self._repair_with_schema(sql, schema)
+            if ok_fix is True and fixed != sql:
+                repaired_sql = fixed
+            if notes:
+                issues.extend(
+                    [f"note:{n}" for n in notes if not n.startswith("parse_error")]
+                )
+
+        # 4) Preview execution check:
+        #    - If exec_result is provided, use it directly
+        #    - Otherwise, if adapter has execute_preview, run it
         try:
-            exec_result = adapter.execute_preview(sql) if adapter else {"ok": True}
-            ok_val = self._extract_ok(exec_result)
-            if ok_val is False:
-                err = self._extract_error(exec_result)
+            if exec_result is not None:
+                er = exec_result
+            elif adapter is not None and hasattr(adapter, "execute_preview"):
+                er = adapter.execute_preview(repaired_sql or sql)
+            else:
+                er = {"ok": True}
+
+            ok_val = (
+                isinstance(er, dict) and isinstance(er.get("ok"), bool) and er["ok"]
+            )
+            if not ok_val:
+                msg = None
+                if isinstance(er, dict):
+                    for k in ("error", "message", "detail"):
+                        if k in er and er[k]:
+                            msg = str(er[k])
+                            break
                 verifier_failures_total.labels(reason="preview_exec_error").inc()
-                issues.append(f"exec_error:{err}" if err else "exec_error")
+                issues.append(f"exec_error:{msg or 'preview_failed'}")
         except Exception as e:
             verifier_failures_total.labels(reason="preview_exec_error").inc()
             issues.append(f"exec_exception:{e!s}")
 
-        # 5) Final decision — AFTER all checks (note: no early return before fallback)
-        if issues:
-            verifier_checks_total.labels(ok="false").inc()
-            stage_duration_ms.labels("verifier").observe(_ms(t0) / 1.0)
+        # 5) Final result and trace
+        is_ok: bool = (not issues) or all(i.startswith("note:") for i in issues)
+        ok_label: str = "true" if is_ok else "false"
+        verifier_checks_total.labels(ok=ok_label).inc()
+
+        if is_ok:
+            data: Dict[str, Any] = {"verified": True}
+            if repaired_sql:
+                data["sql"] = repaired_sql
+            return StageResult(
+                ok=True,
+                data=data,
+                trace=StageTrace(stage=self.name, duration_ms=_ms(t0)),
+            )
+        else:
             return StageResult(
                 ok=False,
-                error=issues,
+                error=[i for i in issues if not i.startswith("note:")],
                 trace=StageTrace(
                     stage=self.name, duration_ms=_ms(t0), notes={"issues": issues}
                 ),
             )
 
-        verifier_checks_total.labels(ok="true").inc()
-        stage_duration_ms.labels("verifier").observe(_ms(t0) / 1.0)
-        return StageResult(
-            ok=True,
-            data={"verified": True},
-            trace=StageTrace(stage=self.name, duration_ms=_ms(t0)),
-        )
-
-    def run(self, *, sql: str, adapter: Any) -> StageResult:
-        return self.verify(sql, adapter=adapter)
+    # Public alias for backward compatibility
+    def run(
+        self, *, sql: str, exec_result: Any = None, adapter: Any = None
+    ) -> StageResult:
+        """Back-compat wrapper around verify()."""
+        return self.verify(sql, exec_result=exec_result, adapter=adapter)

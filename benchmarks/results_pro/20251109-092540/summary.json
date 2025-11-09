@@ -1,0 +1,12 @@
+{
+  "timestamp": "2025-11-09T09:26:21",
+  "total": 5,
+  "success": 5,
+  "success_rate": 1.0,
+  "avg_latency_ms": 8215.8,
+  "EM": 0.4,
+  "SM": 0.8,
+  "ExecAcc": 0.8,
+  "split": "dev",
+  "config": "configs/sqlite_pipeline.yaml"
+}
