@@ -1,8 +1,14 @@
-title: NL2SQL Copilot
-emoji: 🧠
+title: NL2SQL Copilot — Mock Demo
+emoji: 🧩
 colorFrom: indigo
-colorTo: purple
+colorTo: blue
 sdk: gradio
-pinned: false
-app_file: app/app.py
+app_file: app/main.py
 python_version: "3.10"
+pinned: false
+license: mit
+tags:
+  - text-to-sql
+  - ai-engineering
+  - demo
+  - gradio
