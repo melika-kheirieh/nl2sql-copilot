@@ -1,61 +1,35 @@
-# ---------- Base ----------
-FROM python:3.12-slim AS base
-
+# ---------- Stage 1: Builder ----------
+FROM python:3.12-slim AS builder
 WORKDIR /app
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
 
-# ---------- Install dependencies ----------
+# Install system deps (curl for healthcheck)
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir supervisor
+RUN pip install --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
 
-# ---------- Gradio env (for Hugging Face) ----------
-ENV GRADIO_SERVER_NAME=0.0.0.0
-ENV GRADIO_SERVER_PORT=7860
+# ---------- Stage 2: Runtime ----------
+FROM python:3.12-slim AS runtime
+WORKDIR /app
 
-# ---------- Copy source ----------
+# Copy from builder
+COPY --from=builder /usr/local/lib/python3.12 /usr/local/lib/python3.12
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy project files
 COPY . .
 
 # ---------- Metadata & Healthcheck ----------
-LABEL maintainer="melika kheirieh"
-LABEL description="NL2SQL Copilot full stack (FastAPI + Gradio)"
-
-# lightweight healthcheck without curl
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')" || exit 1
-
-# ---------- Supervisor config ----------
-RUN echo "[supervisord]" > /etc/supervisord.conf \
- && echo "nodaemon=true" >> /etc/supervisord.conf \
- && echo "" >> /etc/supervisord.conf \
- && echo "[program:fastapi]" >> /etc/supervisord.conf \
- && echo "command=uvicorn main:app --host 0.0.0.0 --port 8000" >> /etc/supervisord.conf \
- && echo "autostart=true" >> /etc/supervisord.conf \
- && echo "" >> /etc/supervisord.conf \
- && echo "[program:gradio]" >> /etc/supervisord.conf \
- && echo "command=python app.py" >> /etc/supervisord.conf \
- && echo "autostart=true" >> /etc/supervisord.conf
-
-# ---------- Ports ----------
 EXPOSE 7860
-EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:7860/ || exit 1
 
-# ---------- Entrypoint ----------
-CMD ["supervisord", "-c", "/etc/supervisord.conf"]
+# ---------- Run the App ----------
+# 👉 Gradio version
+# CMD ["python", "app.py"]
 
-# ---------- Supervisor config ----------
-RUN echo "[supervisord]" > /etc/supervisord.conf \
- && echo "nodaemon=true" >> /etc/supervisord.conf \
- && echo "" >> /etc/supervisord.conf \
- && echo "[program:fastapi]" >> /etc/supervisord.conf \
- && echo "command=uvicorn main:app --host 0.0.0.0 --port 8000" >> /etc/supervisord.conf \
- && echo "autostart=true" >> /etc/supervisord.conf \
- && echo "stdout_logfile=/dev/stdout" >> /etc/supervisord.conf \
- && echo "stderr_logfile=/dev/stderr" >> /etc/supervisord.conf \
- && echo "" >> /etc/supervisord.conf \
- && echo "[program:gradio]" >> /etc/supervisord.conf \
- && echo "command=python app.py" >> /etc/supervisord.conf \
- && echo "autostart=true" >> /etc/supervisord.conf \
- && echo "stdout_logfile=/dev/stdout" >> /etc/supervisord.conf \
- && echo "stderr_logfile=/dev/stderr" >> /etc/supervisord.conf
+# 👉 FastAPI version
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
