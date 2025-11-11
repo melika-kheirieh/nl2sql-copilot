@@ -1,29 +1,56 @@
-# ---------- Base ----------
-FROM python:3.12-slim
+# ---------- Stage 1: Build wheels ----------
+FROM python:3.12-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --upgrade pip && \
+    pip wheel --wheel-dir /wheels -r requirements.txt
+
+# ---------- Stage 2: Runtime ----------
+FROM python:3.12-slim AS runtime
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
 WORKDIR /app
 
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates && rm -rf /var/lib/apt/lists/*
 
-# ---------- Install dependencies ----------
+RUN useradd -m appuser
+
+COPY --from=builder /wheels /wheels
 COPY requirements.txt .
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
-    pip install --no-cache-dir -r requirements.txt && \
-    rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir --find-links=/wheels -r requirements.txt && \
+    rm -rf /wheels
 
-# ---------- Copy app ----------
 COPY . .
 
-# ---------- Metadata ----------
-LABEL org.opencontainers.image.title="nl2sql-copilot" \
-      org.opencontainers.image.description="Hybrid FastAPI + Gradio demo for Hugging Face Spaces" \
-      org.opencontainers.image.version="1.0.0"
+RUN chown -R appuser:appuser /app
 
-# ---------- Healthcheck ----------
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-  CMD curl -fs http://localhost:7860/ || exit 1
+USER appuser
 
-# ---------- Run both backend & frontend ----------
-EXPOSE 7860 8000
-CMD ["bash", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000 & python demo/app.py"]
+ENV GRADIO_SERVER_NAME=0.0.0.0 \
+    GRADIO_SERVER_PORT=7860 \
+    USE_MOCK=1
+
+# Healthcheck points to Gradio app
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860', timeout=2)"
+
+# Hugging Face exposes 7860
+EXPOSE 7860
+
+# Run both FastAPI (backend) and Gradio (frontend)
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --workers ${UVICORN_WORKERS:-1} & python -m demo.app"]
