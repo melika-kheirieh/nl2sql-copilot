@@ -4,9 +4,13 @@ import os
 import json
 from pathlib import Path
 
+# Prefer internal backend when running inside Docker
+API_HOST = os.getenv("API_HOST", "localhost")
+API_PORT = os.getenv("API_PORT", "8000")
+
 USE_MOCK = os.environ.get("USE_MOCK", "0") == "1"
-API_UPLOAD = "http://localhost:8000/api/v1/nl2sql/upload_db"
-API_QUERY = "http://localhost:8000/api/v1/nl2sql"
+API_UPLOAD = f"http://{API_HOST}:{API_PORT}/api/v1/nl2sql/upload_db"
+API_QUERY = f"http://{API_HOST}:{API_PORT}/api/v1/nl2sql"
 
 HARDCODED_MOCK = {
     "sql": "SELECT name, country FROM singer WHERE age > 20;",
