@@ -1,35 +1,28 @@
-# ---------- Stage 1: Builder ----------
-FROM python:3.12-slim AS builder
+# ---------- Base ----------
+FROM python:3.12-slim
 WORKDIR /app
 
-# Install system deps (curl for healthcheck)
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
- && rm -rf /var/lib/apt/lists/*
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
 
-# Install dependencies
+# ---------- Dependencies ----------
 COPY requirements.txt .
-RUN pip install --upgrade pip \
- && pip install --no-cache-dir -r requirements.txt
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    pip install --no-cache-dir -r requirements.txt && \
+    rm -rf /var/lib/apt/lists/*
 
-# ---------- Stage 2: Runtime ----------
-FROM python:3.12-slim AS runtime
-WORKDIR /app
-
-# Copy from builder
-COPY --from=builder /usr/local/lib/python3.12 /usr/local/lib/python3.12
-COPY --from=builder /usr/local/bin /usr/local/bin
-
-# Copy project files
+# ---------- Copy app ----------
 COPY . .
 
 # ---------- Metadata & Healthcheck ----------
-EXPOSE 7860
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost:7860/ || exit 1
+LABEL org.opencontainers.image.title="nl2sql-copilot" \
+      org.opencontainers.image.description="NL2SQL Copilot full-stack demo (FastAPI + Gradio)" \
+      org.opencontainers.image.version="1.0.0"
 
-# ---------- Run the App ----------
-# 👉 Gradio version
-# CMD ["python", "app.py"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+  CMD curl -fs http://localhost:8000/healthz || exit 1
 
-# 👉 FastAPI version
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+# ---------- Run both backend & frontend ----------
+EXPOSE 7860 8000
+CMD ["bash", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000 & python app.py"]
