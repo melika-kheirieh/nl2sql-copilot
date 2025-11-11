@@ -10,6 +10,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir supervisor
 
+# ---------- Gradio env (for Hugging Face) ----------
+ENV GRADIO_SERVER_NAME=0.0.0.0
+ENV GRADIO_SERVER_PORT=7860
+
 # ---------- Copy source ----------
 COPY . .
 
