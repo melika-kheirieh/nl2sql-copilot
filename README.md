@@ -4,7 +4,6 @@ emoji: 🧩
 colorFrom: indigo
 colorTo: blue
 sdk: docker
-python_version: "3.12"
 pinned: false
 ---
 # 🧩 NL2SQL Copilot
