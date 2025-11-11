@@ -26,4 +26,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 
 # ---------- Run both backend & frontend ----------
 EXPOSE 7860 8000
-CMD ["bash", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000 & python app.py"]
+CMD ["bash", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000 & python demo/app.py"]
