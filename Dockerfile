@@ -53,4 +53,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 EXPOSE 7860
 
 # Run both FastAPI (backend) and Gradio (frontend)
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --workers ${UVICORN_WORKERS:-1} & python -m demo.app"]
+CMD ["python", "start.py"]
