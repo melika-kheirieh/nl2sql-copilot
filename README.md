@@ -7,12 +7,6 @@ sdk: gradio
 app_file: app/main.py
 python_version: "3.10"
 pinned: false
-license: mit
-tags:
-  - text-to-sql
-  - ai-engineering
-  - demo
-  - gradio
 ---
 # 🧩 NL2SQL Copilot
 
