@@ -4,6 +4,7 @@ import os
 
 
 def run_fastapi():
+    """Run FastAPI backend on port 8000."""
     subprocess.run(
         [
             "uvicorn",
@@ -15,15 +16,21 @@ def run_fastapi():
             "--proxy-headers",
             "--workers",
             str(os.getenv("UVICORN_WORKERS", 1)),
-        ]
+        ],
+        check=True,
     )
 
 
 def run_gradio():
-    pass  # noqa: just import to launch
+    """Launch Gradio UI (demo/app.py)."""
+    import demo.app  # noqa: F401
+    # This module runs demo.launch() on import
 
 
 if __name__ == "__main__":
+    # Start FastAPI in background thread
     t = threading.Thread(target=run_fastapi, daemon=True)
     t.start()
+
+    # Run Gradio in foreground (keeps container alive)
     run_gradio()
