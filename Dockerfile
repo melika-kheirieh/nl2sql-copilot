@@ -52,5 +52,6 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 # Hugging Face Spaces expect public app on port 7860
 EXPOSE 7860
 
+RUN echo "==== DEBUG LISTING /app ====" && ls -R /app
 # Unified startup script
 CMD ["python", "start.py"]
