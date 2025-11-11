@@ -43,3 +43,19 @@ EXPOSE 8000
 
 # ---------- Entrypoint ----------
 CMD ["supervisord", "-c", "/etc/supervisord.conf"]
+
+# ---------- Supervisor config ----------
+RUN echo "[supervisord]" > /etc/supervisord.conf \
+ && echo "nodaemon=true" >> /etc/supervisord.conf \
+ && echo "" >> /etc/supervisord.conf \
+ && echo "[program:fastapi]" >> /etc/supervisord.conf \
+ && echo "command=uvicorn main:app --host 0.0.0.0 --port 8000" >> /etc/supervisord.conf \
+ && echo "autostart=true" >> /etc/supervisord.conf \
+ && echo "stdout_logfile=/dev/stdout" >> /etc/supervisord.conf \
+ && echo "stderr_logfile=/dev/stderr" >> /etc/supervisord.conf \
+ && echo "" >> /etc/supervisord.conf \
+ && echo "[program:gradio]" >> /etc/supervisord.conf \
+ && echo "command=python app.py" >> /etc/supervisord.conf \
+ && echo "autostart=true" >> /etc/supervisord.conf \
+ && echo "stdout_logfile=/dev/stdout" >> /etc/supervisord.conf \
+ && echo "stderr_logfile=/dev/stderr" >> /etc/supervisord.conf

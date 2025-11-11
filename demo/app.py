@@ -188,7 +188,10 @@ with gr.Blocks(title="NL2SQL Copilot") as demo:
 if __name__ == "__main__":
     import os
 
+    print("[demo] Launching Gradio demo on 0.0.0.0:7860 ...", flush=True)
     demo.launch(
         server_name=os.getenv("GRADIO_SERVER_NAME", "0.0.0.0"),
         server_port=int(os.getenv("GRADIO_SERVER_PORT", "7860")),
+        share=False,
+        debug=True,
     )
