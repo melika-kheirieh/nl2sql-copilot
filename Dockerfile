@@ -15,7 +15,7 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip wheel --wheel-dir /wheels -r requirements.txt
 
-# ---------- Stage 2: Runtime image ----------
+# ---------- Stage 2: Runtime ----------
 FROM python:3.12-slim AS runtime
 
 ENV PIP_NO_CACHE_DIR=1 \
@@ -25,47 +25,32 @@ ENV PIP_NO_CACHE_DIR=1 \
 
 WORKDIR /app
 
-# HTTPS certs for outbound calls
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
 RUN useradd -m appuser
 
-# Install deps from wheels
 COPY --from=builder /wheels /wheels
 COPY requirements.txt .
 RUN pip install --no-cache-dir --find-links=/wheels -r requirements.txt && \
     rm -rf /wheels
 
-# App code
 COPY . .
 
-# Permissions
 RUN chown -R appuser:appuser /app
 
-# ---- HF expects the *public* web app on port 7860 ----
+USER appuser
+
 ENV GRADIO_SERVER_NAME=0.0.0.0 \
     GRADIO_SERVER_PORT=7860 \
     USE_MOCK=1
 
-USER appuser
-
-# Healthcheck on Gradio UI port
+# Healthcheck points to Gradio app
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request, sys; \
-import urllib.error; \
-import time; \
-url='http://127.0.0.1:7860/'; \
-import urllib.request as u; \
-sys.exit(0) if u.urlopen(url, timeout=2).getcode() == 200 else sys.exit(1)"
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860', timeout=2)"
 
-# Expose HF-facing port (Gradio)
+# Hugging Face exposes 7860
 EXPOSE 7860
 
-# Run FastAPI on 8000 (internal) AND Gradio on 7860 (public)
-CMD ["sh", "-c", "\
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --workers ${UVICORN_WORKERS:-1} & \
-python -m demo.app \
-"]
+# Run both FastAPI (backend) and Gradio (frontend)
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --workers ${UVICORN_WORKERS:-1} & python -m demo.app"]
