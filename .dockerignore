@@ -18,3 +18,7 @@ build/
 *.sqlite
 *.db
 tests/
+benchmarks/results*/
+data/spider/
+docs/
+.pytest_cache/
