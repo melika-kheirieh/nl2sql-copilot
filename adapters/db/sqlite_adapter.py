@@ -2,6 +2,7 @@ import sqlite3
 import logging
 from typing import List, Tuple, Any
 from adapters.db.base import DBAdapter
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -11,13 +12,15 @@ class SQLiteAdapter(DBAdapter):
     dialect = "sqlite"
 
     def __init__(self, path: str):
-        self.path = path
+        # resolve absolute path for safety
+        self.path = Path(path).resolve()
         log.info("SQLiteAdapter initialized with DB path: %s", self.path)
 
     def preview_schema(self, limit_per_table: int = 0) -> str:
-        with sqlite3.connect(self.path, uri=True) as conn:
+        uri = self.path.as_uri()
+        with sqlite3.connect(f"{uri}?mode=ro", uri=True) as conn:
             cur = conn.cursor()
-            cur.execute("PRAGMA foreign_keys = ON")
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
             tables = [t[0] for t in cur.fetchall()]
             lines = []
             for t in tables:
@@ -28,9 +31,11 @@ class SQLiteAdapter(DBAdapter):
 
     def execute(self, sql: str) -> Tuple[List[Tuple[Any, ...]], List[str]]:
         # enforce read-only connection
-        uri = f"file:{self.path}?mode=ro&uri=true"
+        uri = self.path.as_uri()
         log.info("SQLiteAdapter opening read-only connection to: %s", uri)
-        with sqlite3.connect(uri, uri=True, timeout=3) as conn:
+        if not self.path.exists():
+            raise FileNotFoundError(f"SQLite DB does not exist: {self.path}")
+        with sqlite3.connect(f"{uri}?mode=ro", uri=True, timeout=3) as conn:
             cur = conn.cursor()
             log.debug("Executing SQL: %s", sql.strip().replace("\n", " "))
             cur.execute(sql)
