@@ -7,7 +7,8 @@ import os
 from pathlib import Path
 import time
 import uuid
-from typing import Any, Dict, Optional, TypedDict, Union, cast, Callable
+from typing import Any, Dict, Optional, TypedDict, Union, cast, Callable, Tuple
+import hashlib
 
 # --- Third-party ---
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query
@@ -60,6 +61,39 @@ def _build_pipeline(adapter) -> Any:
     """Thin wrapper for tests to monkeypatch; builds a pipeline bound to adapter."""
     return pipeline_from_config_with_adapter(CONFIG_PATH, adapter=adapter)
 
+
+####################################
+# ---- Simple in-memory cache for NL→SQL responses ----
+
+
+_CACHE_TTL = int(os.getenv("NL2SQL_CACHE_TTL_SEC", "300"))  # 5 minutes
+_CACHE_MAX = int(os.getenv("NL2SQL_CACHE_MAX", "256"))
+_CACHE: Dict[Tuple[str, str, str], Tuple[float, Dict[str, Any]]] = {}
+
+
+def _norm_q(s: str) -> str:
+    return (s or "").strip().lower()
+
+
+def _schema_key(preview: str) -> str:
+    return hashlib.md5((preview or "").encode()).hexdigest()
+
+
+def _ck(db_id: Optional[str], query: str, preview: str) -> Tuple[str, str, str]:
+    return (db_id or "default", _norm_q(query), _schema_key(preview))
+
+
+def _cache_gc(now: float) -> None:
+    # TTL eviction
+    for k, (ts, _) in list(_CACHE.items()):
+        if now - ts > _CACHE_TTL:
+            _CACHE.pop(k, None)
+    # size eviction (ساده)
+    while len(_CACHE) > _CACHE_MAX:
+        _CACHE.pop(next(iter(_CACHE)), None)
+
+
+####################################
 
 router = APIRouter(prefix="/nl2sql")
 
@@ -321,6 +355,14 @@ def nl2sql_handler(
         db_id, cast(Optional[str], getattr(request, "schema_preview", None))
     )
 
+    # ---- cache lookup ----
+    now = time.time()
+    _cache_gc(now)
+    ck = _ck(db_id, request.query, final_preview)
+    hit = _CACHE.get(ck)
+    if hit and now - hit[0] <= _CACHE_TTL:
+        return cast(Dict[str, Any], hit[1])  # early return
+
     # Choose runner: default pipeline from YAML OR per-request override with a specific adapter
     if db_id:
         adapter = _select_adapter(db_id)
@@ -359,12 +401,15 @@ def nl2sql_handler(
 
     # Success path → 200 (coerce/standardize traces for API)
     traces = [_round_trace(t) for t in (result.traces or [])]
-    return NL2SQLResponse(
+    payload = NL2SQLResponse(
         ambiguous=False,
         sql=result.sql,
         rationale=result.rationale,
         traces=traces,
     )
+    # store in cache
+    _CACHE[ck] = (time.time(), cast(Dict[str, Any], payload.model_dump()))
+    return payload
 
 
 def _derive_schema_preview(adapter: Union[PostgresAdapter, SQLiteAdapter]) -> str:
