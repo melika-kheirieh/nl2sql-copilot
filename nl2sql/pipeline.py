@@ -305,6 +305,7 @@ class Pipeline:
             if not verified:
                 for _attempt in range(2):
                     # repair
+                    repair_attempts_total.labels(outcome="attempt").inc()
                     t0 = time.perf_counter()
                     r_fix = self._safe_stage(
                         self.repair.run,

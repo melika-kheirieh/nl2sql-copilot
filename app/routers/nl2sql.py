@@ -17,7 +17,7 @@ from prometheus_client import Counter
 
 # --- Local ---
 from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
-from app.state import get_db_path, cleanup_stale_dbs, register_db
+from app.state import cleanup_stale_dbs, register_db
 from nl2sql.pipeline import FinalResult, FinalResult as _FinalResult
 from adapters.llm.openai_provider import OpenAIProvider
 from adapters.db.sqlite_adapter import SQLiteAdapter
@@ -108,7 +108,7 @@ def _cache_gc(now: float) -> None:
     for k, (ts, _) in list(_CACHE.items()):
         if now - ts > _CACHE_TTL:
             _CACHE.pop(k, None)
-    # size eviction (ساده)
+    # size eviction
     while len(_CACHE) > _CACHE_MAX:
         _CACHE.pop(next(iter(_CACHE)), None)
 
@@ -145,7 +145,7 @@ _PIPELINE = pipeline_from_config(CONFIG_PATH)
 # -------------------------------
 def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapter]:
     """
-    Resolve a DB adapter based on module-level DB_MODE and an optional db_id.
+    Resolve DB adapter path for SQLite or Postgres.
     """
     if DB_MODE == "postgres":
         dsn = os.environ.get("POSTGRES_DSN")
@@ -153,17 +153,28 @@ def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapte
             raise HTTPException(status_code=500, detail="POSTGRES_DSN env is missing")
         return PostgresAdapter(dsn)
 
-    # sqlite mode
     if db_id:
         cleanup_stale_dbs()
-        path = get_db_path(db_id)
-        if path and os.path.exists(path):
-            return SQLiteAdapter(path)
-        raise HTTPException(
-            status_code=404, detail=f"db_id not found or expired: {db_id}"
-        )
+        import logging
 
-    # default sqlite fallback
+        log = logging.getLogger(__name__)
+
+        candidates = [
+            Path("/tmp/nl2sql_dbs") / f"{db_id}.sqlite",
+            Path("/tmp/nl2sql_dbs") / f"{db_id}.db",
+            Path("data/uploads") / f"{db_id}.sqlite",
+            Path("data/uploads") / f"{db_id}.db",
+            Path("data") / f"{db_id}.sqlite",
+            Path("data") / f"{db_id}.db",
+        ]
+
+        for candidate in candidates:
+            if candidate.exists():
+                log.info(f"✅ Using DB file: {candidate}")
+                return SQLiteAdapter(str(candidate))
+
+        raise HTTPException(status_code=404, detail=f"db_id not found: {db_id}")
+
     default_path = Path(DEFAULT_SQLITE_PATH)
     if not default_path.exists():
         raise HTTPException(status_code=500, detail="default SQLite DB not found")

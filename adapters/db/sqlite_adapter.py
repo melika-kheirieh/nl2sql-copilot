@@ -17,8 +17,9 @@ class SQLiteAdapter(DBAdapter):
         log.info("SQLiteAdapter initialized with DB path: %s", self.path)
 
     def preview_schema(self, limit_per_table: int = 0) -> str:
-        uri = self.path.as_uri()
-        with sqlite3.connect(f"{uri}?mode=ro", uri=True) as conn:
+        if not self.path.exists():
+            raise FileNotFoundError(f"SQLite DB does not exist: {self.path}")
+        with sqlite3.connect(f"file:{self.path}?mode=ro", uri=True) as conn:
             cur = conn.cursor()
             cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
             tables = [t[0] for t in cur.fetchall()]
@@ -30,12 +31,12 @@ class SQLiteAdapter(DBAdapter):
             return "\n".join(lines)
 
     def execute(self, sql: str) -> Tuple[List[Tuple[Any, ...]], List[str]]:
-        # enforce read-only connection
-        uri = self.path.as_uri()
-        log.info("SQLiteAdapter opening read-only connection to: %s", uri)
         if not self.path.exists():
             raise FileNotFoundError(f"SQLite DB does not exist: {self.path}")
-        with sqlite3.connect(f"{uri}?mode=ro", uri=True, timeout=3) as conn:
+        # use proper SQLite URI (not .as_uri())
+        uri = f"file:{self.path}?mode=ro"
+        log.info("SQLiteAdapter opening read-only connection to: %s", uri)
+        with sqlite3.connect(uri, uri=True, timeout=3) as conn:
             cur = conn.cursor()
             log.debug("Executing SQL: %s", sql.strip().replace("\n", " "))
             cur.execute(sql)

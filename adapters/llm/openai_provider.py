@@ -148,6 +148,8 @@ CRITICAL RULES:
 7. Do not add unnecessary parentheses or formatting
 8. Match exact column and table names from the schema (case-sensitive)
 9. NEVER return empty SQL. If unsure, return the simplest valid SQL that answers the question.
+10. Use exact identifiers from `schema_preview` (case-insensitive match).
+11. Do NOT invent or pluralize table names. E.g., use `Artist`, not `artists`.
 
 IMPORTANT:
 - For counting all rows: Use COUNT(*) not COUNT(column_name)
@@ -298,6 +300,8 @@ IMPORTANT RULES:
 3. Preserve the original intent of the query
 4. Follow SQLite syntax rules
 5. Don't add aliases or table prefixes unless necessary
+6. Use exact identifiers from `schema_preview` (case-insensitive match).
+7. Do NOT invent or pluralize table names. E.g., use `Artist`, not `artists`.
 
 Return ONLY the corrected SQL query, nothing else."""
 
