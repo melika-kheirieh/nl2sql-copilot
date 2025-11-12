@@ -22,9 +22,16 @@ def run_fastapi():
 
 
 def run_gradio():
-    """Launch Gradio UI (demo/app.py)."""
-    import demo.app  # noqa: F401
-    # This module runs demo.launch() on import
+    """Build and launch Gradio UI on the Space's PORT."""
+    from demo.app import build_ui
+
+    demo = build_ui()
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=int(os.getenv("PORT", "7860")),
+        show_api=False,
+        debug=False,
+    )
 
 
 if __name__ == "__main__":
