@@ -2,18 +2,21 @@ from __future__ import annotations
 
 # --- Stdlib ---
 from dataclasses import asdict, is_dataclass
-import json
 import os
 from pathlib import Path
 import time
 import uuid
-from typing import Any, Dict, Optional, TypedDict, Union, cast, List, Callable
+from typing import Any, Dict, Optional, Union, cast, Callable, Tuple
+import hashlib
 
 # --- Third-party ---
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query
+from fastapi import Security
+from fastapi.security import APIKeyHeader
 
 # --- Local ---
 from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
+from app.state import get_db_path, cleanup_stale_dbs, register_db
 from nl2sql.pipeline import FinalResult, FinalResult as _FinalResult
 from adapters.llm.openai_provider import OpenAIProvider
 from adapters.db.sqlite_adapter import SQLiteAdapter
@@ -23,7 +26,21 @@ from nl2sql.pipeline_factory import (
     pipeline_from_config_with_adapter,
 )
 
+
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def require_api_key(key: Optional[str] = Security(api_key_header)):
+    raw = os.getenv("API_KEYS", "")
+    allowed = {k.strip() for k in raw.split(",") if k.strip()}
+    if not allowed:  # no keys set → auth disabled (dev mode)
+        return
+    if not key or key not in allowed:
+        raise HTTPException(status_code=401, detail="invalid API key")
+
+
 _PIPELINE: Optional[Any] = None  # lazy cache
+
 
 Runner = Callable[..., _FinalResult]
 
@@ -60,6 +77,39 @@ def _build_pipeline(adapter) -> Any:
     return pipeline_from_config_with_adapter(CONFIG_PATH, adapter=adapter)
 
 
+####################################
+# ---- Simple in-memory cache for NL→SQL responses ----
+
+
+_CACHE_TTL = int(os.getenv("NL2SQL_CACHE_TTL_SEC", "300"))  # 5 minutes
+_CACHE_MAX = int(os.getenv("NL2SQL_CACHE_MAX", "256"))
+_CACHE: Dict[Tuple[str, str, str], Tuple[float, Dict[str, Any]]] = {}
+
+
+def _norm_q(s: str) -> str:
+    return (s or "").strip().lower()
+
+
+def _schema_key(preview: str) -> str:
+    return hashlib.md5((preview or "").encode()).hexdigest()
+
+
+def _ck(db_id: Optional[str], query: str, preview: str) -> Tuple[str, str, str]:
+    return (db_id or "default", _norm_q(query), _schema_key(preview))
+
+
+def _cache_gc(now: float) -> None:
+    # TTL eviction
+    for k, (ts, _) in list(_CACHE.items()):
+        if now - ts > _CACHE_TTL:
+            _CACHE.pop(k, None)
+    # size eviction (ساده)
+    while len(_CACHE) > _CACHE_MAX:
+        _CACHE.pop(next(iter(_CACHE)), None)
+
+
+####################################
+
 router = APIRouter(prefix="/nl2sql")
 
 # -------------------------------
@@ -85,76 +135,12 @@ CONFIG_PATH = os.getenv("PIPELINE_CONFIG", "configs/sqlite_pipeline.yaml")
 _PIPELINE = pipeline_from_config(CONFIG_PATH)
 
 
-class DBEntry(TypedDict):
-    path: str
-    ts: float
-
-
-# In-memory map: db_id -> {"path": str, "ts": float}
-_DB_MAP: Dict[str, DBEntry] = {}
-
-
-def _save_db_map() -> None:
-    try:
-        with open(_DB_MAP_PATH, "w") as f:
-            json.dump(_DB_MAP, f)
-    except Exception as e:
-        print(f"⚠️ Failed to save DB map: {e}")
-
-
-def _load_db_map() -> None:
-    global _DB_MAP
-    if _DB_MAP_PATH.exists():
-        try:
-            with open(_DB_MAP_PATH, "r") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                restored: Dict[str, DBEntry] = {}
-                for k, v in data.items():
-                    path = v.get("path")
-                    ts = v.get("ts")
-                    if isinstance(path, str) and isinstance(ts, (int, float)):
-                        restored[k] = {"path": path, "ts": float(ts)}
-                _DB_MAP.update(restored)
-                print(f"📂 Restored {_DB_MAP_PATH} with {len(_DB_MAP)} entries.")
-        except Exception as e:
-            print(f"⚠️ Failed to load DB map: {e}")
-
-
-def _cleanup_db_map() -> None:
-    now = time.time()
-    expired = [k for k, v in _DB_MAP.items() if (now - v["ts"]) > _DB_TTL_SECONDS]
-    for k in expired:
-        path: str = _DB_MAP[k]["path"]
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
-        _DB_MAP.pop(k, None)
-
-
-# Call once at import (safe & light); heavy things remain lazy.
-_load_db_map()
-
-
 # -------------------------------
 # Adapter selection (lazy)
 # -------------------------------
 def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapter]:
     """
     Resolve a DB adapter based on module-level DB_MODE and an optional db_id.
-
-    - postgres mode:
-        requires POSTGRES_DSN in env
-    - sqlite mode:
-        if db_id provided, resolve file by:
-            1) absolute path (if user supplied a full path)
-            2) uploads/{db_id}.sqlite
-            3) uploads/{db_id}.db
-            4) data/{db_id}.sqlite
-            5) data/{db_id}.db
-        else fallback to DEFAULT_SQLITE_PATH
     """
     if DB_MODE == "postgres":
         dsn = os.environ.get("POSTGRES_DSN")
@@ -164,31 +150,44 @@ def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapte
 
     # sqlite mode
     if db_id:
-        # 1) absolute path
-        p = Path(db_id)
-        candidates: List[Path] = []
-        if p.is_absolute():
-            candidates.append(p)
-
-        # 2) uploads/
-        candidates.append(UPLOAD_DIR / f"{db_id}.sqlite")
-        candidates.append(UPLOAD_DIR / f"{db_id}.db")
-
-        # 3) data/
-        candidates.append(Path("data") / f"{db_id}.sqlite")
-        candidates.append(Path("data") / f"{db_id}.db")
-
-        for c in candidates:
-            if c.exists() and c.is_file():
-                return SQLiteAdapter(str(c))
-
-        raise HTTPException(status_code=400, detail="invalid db_id (file not found)")
+        cleanup_stale_dbs()
+        path = get_db_path(db_id)
+        if path and os.path.exists(path):
+            return SQLiteAdapter(path)
+        raise HTTPException(
+            status_code=404, detail=f"db_id not found or expired: {db_id}"
+        )
 
     # default sqlite fallback
     default_path = Path(DEFAULT_SQLITE_PATH)
     if not default_path.exists():
         raise HTTPException(status_code=500, detail="default SQLite DB not found")
     return SQLiteAdapter(str(default_path))
+
+
+# -------------------------------
+# Schema preview endpoint
+# -------------------------------
+
+
+@router.get("/schema")
+def get_schema(db_id: Optional[str] = Query(default=None)):
+    """
+    Return a schema preview for a given db_id (SQLite only).
+    If db_id is omitted, returns the default database schema.
+    """
+    try:
+        adapter = _select_adapter(db_id)
+        preview = _derive_schema_preview(adapter)
+        if not preview.strip():
+            raise HTTPException(
+                status_code=404, detail="Schema preview not available or empty"
+            )
+        return {"db_id": db_id or "default", "schema_preview": preview}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Schema introspection failed: {e}")
 
 
 # -------------------------------
@@ -258,7 +257,7 @@ def _round_trace(t: Any) -> Dict[str, Any]:
 # -------------------------------
 # Upload endpoint (SQLite only)
 # -------------------------------
-@router.post("/upload_db")
+@router.post("/upload_db", dependencies=[Depends(require_api_key)])
 async def upload_db(file: UploadFile = File(...)):
     if DB_MODE != "sqlite":
         raise HTTPException(
@@ -286,15 +285,28 @@ async def upload_db(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to store DB: {e}")
 
-    _DB_MAP[db_id] = {"path": out_path, "ts": time.time()}
-    _save_db_map()
+    register_db(db_id, out_path)
     return {"db_id": db_id}
+
+
+def _final_schema_preview(db_id: Optional[str], provided_preview: Optional[str]) -> str:
+    if provided_preview and provided_preview.strip():
+        return provided_preview
+    if db_id:
+        adapter = _select_adapter(db_id)
+        return _derive_schema_preview(adapter) or ""
+    return ""
+
+
+@router.get("/health")
+def health():
+    return {"status": "ok", "version": os.getenv("APP_VERSION", "dev")}
 
 
 # -------------------------------
 # Main NL2SQL endpoint
 # -------------------------------
-@router.post("", name="nl2sql_handler")
+@router.post("", name="nl2sql_handler", dependencies=[Depends(require_api_key)])
 def nl2sql_handler(
     request: NL2SQLRequest,
     run: Runner = Depends(get_runner),
@@ -304,19 +316,25 @@ def nl2sql_handler(
     while keeping all other stages from the YAML configs intact.
     """
     db_id = getattr(request, "db_id", None)
-    provided_preview = (
-        cast(Optional[str], getattr(request, "schema_preview", None)) or ""
+    final_preview = _final_schema_preview(
+        db_id, cast(Optional[str], getattr(request, "schema_preview", None))
     )
+
+    # ---- cache lookup ----
+    now = time.time()
+    _cache_gc(now)
+    ck = _ck(db_id, request.query, final_preview)
+    hit = _CACHE.get(ck)
+    if hit and now - hit[0] <= _CACHE_TTL:
+        return cast(Dict[str, Any], hit[1])  # early return
 
     # Choose runner: default pipeline from YAML OR per-request override with a specific adapter
     if db_id:
         adapter = _select_adapter(db_id)
         pipeline = _build_pipeline(adapter)
         runner = pipeline.run
-        final_preview = provided_preview  # keep simple; derive only if you have a SQLite schema helper
     else:
         runner = run
-        final_preview = provided_preview or ""
 
     # Execute pipeline
     try:
@@ -348,12 +366,15 @@ def nl2sql_handler(
 
     # Success path → 200 (coerce/standardize traces for API)
     traces = [_round_trace(t) for t in (result.traces or [])]
-    return NL2SQLResponse(
+    payload = NL2SQLResponse(
         ambiguous=False,
         sql=result.sql,
         rationale=result.rationale,
         traces=traces,
     )
+    # store in cache
+    _CACHE[ck] = (time.time(), cast(Dict[str, Any], payload.model_dump()))
+    return payload
 
 
 def _derive_schema_preview(adapter: Union[PostgresAdapter, SQLiteAdapter]) -> str:
