@@ -13,6 +13,7 @@ import hashlib
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query
 from fastapi import Security
 from fastapi.security import APIKeyHeader
+from prometheus_client import Counter
 
 # --- Local ---
 from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
@@ -25,6 +26,7 @@ from nl2sql.pipeline_factory import (
     pipeline_from_config,
     pipeline_from_config_with_adapter,
 )
+from nl2sql.prom import REGISTRY
 
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -80,7 +82,10 @@ def _build_pipeline(adapter) -> Any:
 ####################################
 # ---- Simple in-memory cache for NL→SQL responses ----
 
-
+cache_hits_total = Counter("cache_hits_total", "NL2SQL cache hits", registry=REGISTRY)
+cache_misses_total = Counter(
+    "cache_misses_total", "NL2SQL cache misses", registry=REGISTRY
+)
 _CACHE_TTL = int(os.getenv("NL2SQL_CACHE_TTL_SEC", "300"))  # 5 minutes
 _CACHE_MAX = int(os.getenv("NL2SQL_CACHE_MAX", "256"))
 _CACHE: Dict[Tuple[str, str, str], Tuple[float, Dict[str, Any]]] = {}
@@ -326,7 +331,9 @@ def nl2sql_handler(
     ck = _ck(db_id, request.query, final_preview)
     hit = _CACHE.get(ck)
     if hit and now - hit[0] <= _CACHE_TTL:
-        return cast(Dict[str, Any], hit[1])  # early return
+        cache_hits_total.inc()
+        return hit[1]  # early return
+    cache_misses_total.inc()
 
     # Choose runner: default pipeline from YAML OR per-request override with a specific adapter
     if db_id:
