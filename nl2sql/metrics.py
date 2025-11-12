@@ -55,7 +55,7 @@ verifier_failures_total = Counter(
 repair_attempts_total = Counter(
     "repair_attempts_total",
     "Number of repair loop attempts",
-    ["outcome"],  # success | failed
+    ["outcome"],  # attempt | success | failed
     registry=REGISTRY,
 )
 

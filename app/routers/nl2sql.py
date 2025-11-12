@@ -108,7 +108,7 @@ def _cache_gc(now: float) -> None:
     for k, (ts, _) in list(_CACHE.items()):
         if now - ts > _CACHE_TTL:
             _CACHE.pop(k, None)
-    # size eviction (ساده)
+    # size eviction
     while len(_CACHE) > _CACHE_MAX:
         _CACHE.pop(next(iter(_CACHE)), None)
 

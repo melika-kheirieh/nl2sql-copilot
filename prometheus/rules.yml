@@ -23,11 +23,8 @@ groups:
     # repair success rate (0..1)
     - record: nl2sql:repair_success_rate
       expr: |
-        (
-          sum(rate(repair_attempts_total{outcome="success"}[5m]))
-        )
-        /
-        clamp_min(sum(rate(repair_attempts_total[5m])), 1)
+          (sum(increase(repair_attempts_total{outcome="success"}[30m]))) /
+          clamp_min(sum(increase(repair_attempts_total[30m])), 1)
 
     # cache hit ratio (0..1)
     - record: nl2sql:cache_hit_ratio
