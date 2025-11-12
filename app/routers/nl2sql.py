@@ -157,8 +157,15 @@ def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapte
     if db_id:
         cleanup_stale_dbs()
         path = get_db_path(db_id)
+
+        if not path or not os.path.exists(path):
+            tmp_path = Path("/tmp/nl2sql_dbs") / f"{db_id}.sqlite"
+            if tmp_path.exists():
+                path = str(tmp_path)
+
         if path and os.path.exists(path):
-            return SQLiteAdapter(path)
+            return SQLiteAdapter(str(path))
+
         raise HTTPException(
             status_code=404, detail=f"db_id not found or expired: {db_id}"
         )
