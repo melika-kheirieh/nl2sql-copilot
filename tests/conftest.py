@@ -13,7 +13,7 @@ load_dotenv(ENV_PATH)
 if not os.getenv("OPENAI_API_KEY"):
     os.environ["OPENAI_API_KEY"] = os.getenv("PROXY_API_KEY", "DUMMY_TEST_KEY")
 if not os.getenv("OPENAI_BASE_URL") and os.getenv("PROXY_BASE_URL"):
-    os.environ["OPENAI_BASE_URL"] = os.getenv("PROXY_BASE_URL")
+    os.environ["OPENAI_BASE_URL"] = os.getenv("PROXY_BASE_URL", "DUMMY_TEST_KEY")
 
 
 @pytest.fixture(autouse=True)
