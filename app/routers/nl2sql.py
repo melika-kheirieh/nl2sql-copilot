@@ -298,6 +298,11 @@ def _final_schema_preview(db_id: Optional[str], provided_preview: Optional[str])
     return ""
 
 
+@router.get("/health")
+def health():
+    return {"status": "ok", "version": os.getenv("APP_VERSION", "dev")}
+
+
 # -------------------------------
 # Main NL2SQL endpoint
 # -------------------------------
