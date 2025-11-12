@@ -10,7 +10,7 @@ import uuid
 from typing import Any, Dict, Optional, TypedDict, Union, cast, Callable
 
 # --- Third-party ---
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query
 
 # --- Local ---
 from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
@@ -167,6 +167,31 @@ def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapte
     if not default_path.exists():
         raise HTTPException(status_code=500, detail="default SQLite DB not found")
     return SQLiteAdapter(str(default_path))
+
+
+# -------------------------------
+# Schema preview endpoint
+# -------------------------------
+
+
+@router.get("/schema")
+def get_schema(db_id: Optional[str] = Query(default=None)):
+    """
+    Return a schema preview for a given db_id (SQLite only).
+    If db_id is omitted, returns the default database schema.
+    """
+    try:
+        adapter = _select_adapter(db_id)
+        preview = _derive_schema_preview(adapter)
+        if not preview.strip():
+            raise HTTPException(
+                status_code=404, detail="Schema preview not available or empty"
+            )
+        return {"db_id": db_id or "default", "schema_preview": preview}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Schema introspection failed: {e}")
 
 
 # -------------------------------
