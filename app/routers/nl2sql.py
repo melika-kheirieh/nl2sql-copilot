@@ -295,6 +295,15 @@ async def upload_db(file: UploadFile = File(...)):
     return {"db_id": db_id}
 
 
+def _final_schema_preview(db_id: Optional[str], provided_preview: Optional[str]) -> str:
+    if provided_preview and provided_preview.strip():
+        return provided_preview
+    if db_id:
+        adapter = _select_adapter(db_id)
+        return _derive_schema_preview(adapter) or ""
+    return ""
+
+
 # -------------------------------
 # Main NL2SQL endpoint
 # -------------------------------
@@ -308,8 +317,8 @@ def nl2sql_handler(
     while keeping all other stages from the YAML configs intact.
     """
     db_id = getattr(request, "db_id", None)
-    provided_preview = (
-        cast(Optional[str], getattr(request, "schema_preview", None)) or ""
+    final_preview = _final_schema_preview(
+        db_id, cast(Optional[str], getattr(request, "schema_preview", None))
     )
 
     # Choose runner: default pipeline from YAML OR per-request override with a specific adapter
@@ -317,10 +326,8 @@ def nl2sql_handler(
         adapter = _select_adapter(db_id)
         pipeline = _build_pipeline(adapter)
         runner = pipeline.run
-        final_preview = provided_preview  # keep simple; derive only if you have a SQLite schema helper
     else:
         runner = run
-        final_preview = provided_preview or ""
 
     # Execute pipeline
     try:
