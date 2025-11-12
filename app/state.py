@@ -2,7 +2,7 @@ import os
 import time
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypedDict
 
 log = logging.getLogger(__name__)
 
@@ -14,8 +14,14 @@ log = logging.getLogger(__name__)
 _DB_UPLOAD_DIR = Path(os.getenv("DB_UPLOAD_DIR", "/tmp/nl2sql_dbs"))
 _DB_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+
+class DBEntry(TypedDict):
+    path: str
+    ts: float
+
+
 # in-memory map: {db_id: {"path": str, "ts": float}}
-DB_MAP: dict[str, dict[str, str | float]] = {}
+DB_MAP: dict[str, DBEntry] = {}
 
 # cleanup threshold (hours)
 DB_TTL_HOURS = 6
@@ -39,10 +45,12 @@ def cleanup_stale_dbs() -> None:
     cutoff = DB_TTL_HOURS * 3600
     stale_ids = [db_id for db_id, entry in DB_MAP.items() if now - entry["ts"] > cutoff]
     for db_id in stale_ids:
-        path = DB_MAP[db_id]["path"]
+        path_str = DB_MAP[db_id]["path"]
+        path = Path(path_str)
         try:
-            os.remove(path)
-            log.info(f"🧹 Deleted stale DB: {path}")
+            if path.exists():
+                path.unlink()
+                log.info(f"🧹 Deleted stale DB: {path}")
         except FileNotFoundError:
             pass
         DB_MAP.pop(db_id, None)
@@ -50,12 +58,12 @@ def cleanup_stale_dbs() -> None:
 
 def get_db_path(db_id: str) -> Optional[str]:
     """Return full path of an uploaded DB (persistent lookup)."""
-    # ⃣ in-memory lookup
     entry = DB_MAP.get(db_id)
-    if entry and Path(entry["path"]).exists():
-        return entry["path"]
+    if entry:
+        path_str = entry["path"]
+        if Path(path_str).exists():
+            return path_str
 
-    # ⃣ persistent fallback scan
     candidates = [
         _DB_UPLOAD_DIR / f"{db_id}.sqlite",
         _DB_UPLOAD_DIR / f"{db_id}.db",
@@ -67,6 +75,5 @@ def get_db_path(db_id: str) -> Optional[str]:
             log.info(f"🔍 Recovered DB path for {db_id}: {p}")
             return str(p)
 
-    # ⃣ not found
     log.warning(f"⚠️ DB file not found for id={db_id}")
     return None
