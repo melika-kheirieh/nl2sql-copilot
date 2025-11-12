@@ -89,12 +89,10 @@ def upload_db(file_obj):
     if size and size > 20 * 1024 * 1024:
         return None, "File too large (>20MB) for this demo."
 
-    # Gradio gives a temp file path as file_obj.name
     files = {"file": (name, open(file_obj.name, "rb"), "application/octet-stream")}
     try:
         r = requests.post(API_UPLOAD, files=files, timeout=120)
     finally:
-        # best-effort close
         try:
             files["file"][1].close()
         except Exception:
@@ -111,7 +109,6 @@ def upload_db(file_obj):
 
 
 def query_to_sql(user_query: str, db_id: str | None, _debug_flag: bool):
-    """Unified query handler: tries backend or mock fallback."""
     if not user_query.strip():
         return "❌ Please enter a query.", "", "", {}, [], [], "", []
 
@@ -134,60 +131,62 @@ def query_to_sql(user_query: str, db_id: str | None, _debug_flag: bool):
     return badges_text, sql, explanation, result, trace_list, [], "", timings_table
 
 
-# ---- UI definition (unchanged) ----
-with gr.Blocks(title="NL2SQL Copilot") as demo:
-    gr.Markdown("# NL2SQL Copilot\nUpload a SQLite DB (optional) or use default.")
+def build_ui() -> gr.Blocks:
+    with gr.Blocks(title="NL2SQL Copilot") as demo:
+        gr.Markdown("# NL2SQL Copilot\nUpload a SQLite DB (optional) or use default.")
+        db_state = gr.State(value=None)
 
-    db_state = gr.State(value=None)
+        with gr.Row():
+            db_file = gr.File(
+                label="Upload SQLite (.db/.sqlite)", file_types=[".db", ".sqlite"]
+            )
+            upload_btn = gr.Button("Upload DB")
+        db_msg = gr.Markdown()
+        upload_btn.click(upload_db, inputs=[db_file], outputs=[db_state, db_msg])
 
-    with gr.Row():
-        db_file = gr.File(
-            label="Upload SQLite (.db/.sqlite)", file_types=[".db", ".sqlite"]
+        with gr.Row():
+            q = gr.Textbox(label="Question", scale=4)
+            debug = gr.Checkbox(label="Debug (UI only)", value=True, scale=1)
+            run = gr.Button("Run")
+
+        badges = gr.Markdown()
+        sql_out = gr.Code(label="Final SQL", language="sql")
+        exp_out = gr.Textbox(label="Explanation", lines=3)
+
+        with gr.Tab("Result"):
+            res_out = gr.JSON()
+
+        with gr.Tab("Trace"):
+            trace = gr.JSON(label="Stage trace")
+
+        with gr.Tab("Repair"):
+            repair_candidates = gr.JSON(label="Candidates")
+            repair_diff = gr.Textbox(label="Diff (if any)", lines=10)
+
+        with gr.Tab("Timings"):
+            timings = gr.Dataframe(headers=["metric", "ms"], datatype=["str", "number"])
+
+        run.click(
+            query_to_sql,
+            inputs=[q, db_state, debug],
+            outputs=[
+                badges,
+                sql_out,
+                exp_out,
+                res_out,
+                trace,
+                repair_candidates,
+                repair_diff,
+                timings,
+            ],
         )
-        upload_btn = gr.Button("Upload DB")
-    db_msg = gr.Markdown()
-    upload_btn.click(upload_db, inputs=[db_file], outputs=[db_state, db_msg])
+    return demo
 
-    with gr.Row():
-        q = gr.Textbox(label="Question", scale=4)
-        debug = gr.Checkbox(label="Debug (UI only)", value=True, scale=1)
-        run = gr.Button("Run")
 
-    badges = gr.Markdown()
-    sql_out = gr.Code(label="Final SQL", language="sql")
-    exp_out = gr.Textbox(label="Explanation", lines=3)
-
-    with gr.Tab("Result"):
-        res_out = gr.JSON()
-
-    with gr.Tab("Trace"):
-        trace = gr.JSON(label="Stage trace")
-
-    with gr.Tab("Repair"):
-        repair_candidates = gr.JSON(label="Candidates")
-        repair_diff = gr.Textbox(label="Diff (if any)", lines=10)
-
-    with gr.Tab("Timings"):
-        timings = gr.Dataframe(headers=["metric", "ms"], datatype=["str", "number"])
-
-    run.click(
-        query_to_sql,
-        inputs=[q, db_state, debug],
-        outputs=[
-            badges,
-            sql_out,
-            exp_out,
-            res_out,
-            trace,
-            repair_candidates,
-            repair_diff,
-            timings,
-        ],
-    )
+# expose for SDK mode (no Docker)
+demo = build_ui()
 
 if __name__ == "__main__":
-    import os
-
     print("[demo] Launching Gradio demo on 0.0.0.0:7860 ...", flush=True)
     demo.launch(
         server_name=os.getenv("GRADIO_SERVER_NAME", "0.0.0.0"),
