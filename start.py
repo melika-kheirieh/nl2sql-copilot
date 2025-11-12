@@ -23,6 +23,7 @@ def run_fastapi():
 
 def run_gradio():
     """Build and launch Gradio UI on the Space's PORT."""
+    print("[start] about to launch gradio on PORT=", os.getenv("PORT"), flush=True)
     from demo.app import build_ui
 
     demo = build_ui()
@@ -36,8 +37,10 @@ def run_gradio():
 
 if __name__ == "__main__":
     # Start FastAPI in background thread
+    print("[start] launching uvicorn thread...", flush=True)
     t = threading.Thread(target=run_fastapi, daemon=True)
     t.start()
 
     # Run Gradio in foreground (keeps container alive)
+    print("[start] about to launch gradio on PORT=", os.getenv("PORT"), flush=True)
     run_gradio()
