@@ -52,4 +52,6 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 # Hugging Face Spaces expect public app on port 7860
 ENV PORT=7860
 EXPOSE 7860
-ENTRYPOINT ["python", "-u", "start.py"]
+
+ENTRYPOINT []
+CMD ["python", "-u", "start.py"]
