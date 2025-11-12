@@ -59,7 +59,6 @@ repair_attempts_total = Counter(
     registry=REGISTRY,
 )
 
-
 # -----------------------------------------------------------------------------
 #  Pipeline-level metrics
 # -----------------------------------------------------------------------------
@@ -69,3 +68,44 @@ pipeline_runs_total = Counter(
     ["status"],  # ok | error | ambiguous
     registry=REGISTRY,
 )
+
+# -----------------------------------------------------------------------------
+#  Cache metrics (optional)
+# -----------------------------------------------------------------------------
+cache_events_total = Counter(
+    "cache_events_total",
+    "Cache hit/miss events in the pipeline",
+    ["hit"],  # "true" | "false"
+    registry=REGISTRY,
+)
+
+# -----------------------------------------------------------------------------
+#  Prime all counters with zero to ensure Grafana panels always have data
+# -----------------------------------------------------------------------------
+for reason in (
+    "forbidden_keyword",
+    "multiple_statements",
+    "non_readonly",
+    "explain_not_allowed",
+    "parse_error",
+    "semantic_check_error",
+    "adapter_failure",
+    "unsafe-sql",
+    "malformed-sql",
+    "unknown",
+):
+    safety_blocks_total.labels(reason=reason).inc(0)
+    verifier_failures_total.labels(reason=reason).inc(0)
+
+for ok in ("true", "false"):
+    safety_checks_total.labels(ok=ok).inc(0)
+    verifier_checks_total.labels(ok=ok).inc(0)
+
+for outcome in ("attempt", "success", "failed"):
+    repair_attempts_total.labels(outcome=outcome).inc(0)
+
+for status in ("ok", "error", "ambiguous"):
+    pipeline_runs_total.labels(status=status).inc(0)
+
+for hit in ("true", "false"):
+    cache_events_total.labels(hit=hit).inc(0)

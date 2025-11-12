@@ -5,6 +5,10 @@ import time
 from typing import Any, Dict
 
 from nl2sql.types import StageResult, StageTrace
+from nl2sql.metrics import (
+    verifier_checks_total,
+    verifier_failures_total,
+)
 
 
 class Verifier:
@@ -92,6 +96,7 @@ class Verifier:
             # --- pass ---
             dt = int(round((time.perf_counter() - t0) * 1000.0))
             notes.update({"verified": True, "reason": reason})
+            verifier_checks_total.labels(ok="true").inc()
             trace = StageTrace(
                 stage="verifier",
                 duration_ms=dt,
@@ -123,6 +128,10 @@ class Verifier:
         notes.update({"verified": False, "reason": reason})
         if exc_type:
             notes["exception_type"] = exc_type
+
+        verifier_checks_total.labels(ok="false").inc()
+        verifier_failures_total.labels(reason=reason).inc()
+
         trace = StageTrace(
             stage="verifier",
             duration_ms=dt,
