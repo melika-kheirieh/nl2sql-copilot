@@ -15,14 +15,6 @@ except Exception:
 
 from app.routers import nl2sql
 
-# ---- Optional DB map restore ----
-try:
-    from app.routers.nl2sql import _load_db_map
-
-    _load_db_map()
-except Exception as e:
-    print(f"⚠️ DB map not restored: {e}")
-
 # ----------------------------------------------------------------------------
 #  App definition
 # ----------------------------------------------------------------------------
