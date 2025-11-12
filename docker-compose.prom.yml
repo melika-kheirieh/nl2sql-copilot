@@ -4,6 +4,7 @@ services:
     container_name: nl2sql-prom
     command:
       - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-lifecycle
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
