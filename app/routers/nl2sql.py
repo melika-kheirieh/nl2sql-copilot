@@ -7,13 +7,14 @@ import os
 from pathlib import Path
 import time
 import uuid
-from typing import Any, Dict, Optional, TypedDict, Union, cast, List, Callable
+from typing import Any, Dict, Optional, TypedDict, Union, cast, Callable
 
 # --- Third-party ---
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 
 # --- Local ---
 from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
+from app.state import get_db_path, cleanup_stale_dbs, register_db
 from nl2sql.pipeline import FinalResult, FinalResult as _FinalResult
 from adapters.llm.openai_provider import OpenAIProvider
 from adapters.db.sqlite_adapter import SQLiteAdapter
@@ -144,17 +145,6 @@ _load_db_map()
 def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapter]:
     """
     Resolve a DB adapter based on module-level DB_MODE and an optional db_id.
-
-    - postgres mode:
-        requires POSTGRES_DSN in env
-    - sqlite mode:
-        if db_id provided, resolve file by:
-            1) absolute path (if user supplied a full path)
-            2) uploads/{db_id}.sqlite
-            3) uploads/{db_id}.db
-            4) data/{db_id}.sqlite
-            5) data/{db_id}.db
-        else fallback to DEFAULT_SQLITE_PATH
     """
     if DB_MODE == "postgres":
         dsn = os.environ.get("POSTGRES_DSN")
@@ -164,25 +154,13 @@ def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapte
 
     # sqlite mode
     if db_id:
-        # 1) absolute path
-        p = Path(db_id)
-        candidates: List[Path] = []
-        if p.is_absolute():
-            candidates.append(p)
-
-        # 2) uploads/
-        candidates.append(UPLOAD_DIR / f"{db_id}.sqlite")
-        candidates.append(UPLOAD_DIR / f"{db_id}.db")
-
-        # 3) data/
-        candidates.append(Path("data") / f"{db_id}.sqlite")
-        candidates.append(Path("data") / f"{db_id}.db")
-
-        for c in candidates:
-            if c.exists() and c.is_file():
-                return SQLiteAdapter(str(c))
-
-        raise HTTPException(status_code=400, detail="invalid db_id (file not found)")
+        cleanup_stale_dbs()
+        path = get_db_path(db_id)
+        if path and os.path.exists(path):
+            return SQLiteAdapter(path)
+        raise HTTPException(
+            status_code=404, detail=f"db_id not found or expired: {db_id}"
+        )
 
     # default sqlite fallback
     default_path = Path(DEFAULT_SQLITE_PATH)
@@ -288,6 +266,7 @@ async def upload_db(file: UploadFile = File(...)):
 
     _DB_MAP[db_id] = {"path": out_path, "ts": time.time()}
     _save_db_map()
+    register_db(db_id, out_path)
     return {"db_id": db_id}
 
 
