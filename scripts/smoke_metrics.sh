@@ -12,16 +12,19 @@ for q in \
 do
   curl -s -X POST "$API/nl2sql" \
     -H 'Content-Type: application/json' \
+    -H 'X-API-Key: dev-key' \
     -d "{\"query\":\"$q\"}" >/dev/null || true
 done
 
 # Send queries that trigger safety and verifier checks
 curl -s -X POST "$API/nl2sql" \
   -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-key' \
   -d '{"query":"DELETE FROM users;"}' >/dev/null || true
 
 curl -s -X POST "$API/nl2sql" \
   -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-key' \
   -d '{"query":"SELECT COUNT(*), country FROM customers;"}' >/dev/null || true
 
 # Print a snapshot of key Prometheus metrics

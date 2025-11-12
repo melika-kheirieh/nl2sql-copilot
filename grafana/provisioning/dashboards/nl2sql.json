@@ -1,68 +1,143 @@
 {
-  "title": "NL2SQL Copilot - Observability",
+  "title": "NL2SQL Copilot — Unified Observability",
+  "uid": "nl2sql-unified",
+  "timezone": "browser",
   "editable": true,
-  "panels": [
-    {
-      "type": "timeseries",
-      "title": "Stage p95 Latency (ms)",
-      "targets": [
-        {
-          "expr": "nl2sql:stage_p95_ms",
-          "legendFormat": "{{stage}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "milliseconds",
-          "decimals": 0
-        }
-      },
-      "id": 1
-    },
-    {
-      "type": "timeseries",
-      "title": "Pipeline Success Ratio",
-      "targets": [
-        {
-          "expr": "nl2sql:pipeline_success_ratio",
-          "legendFormat": "success ratio",
-          "refId": "B"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "max": 1,
-          "decimals": 2
-        }
-      },
-      "id": 2
-    },
-    {
-      "type": "timeseries",
-      "title": "Safety & Verifier Events",
-      "targets": [
-        {
-          "expr": "rate(safety_blocks_total[5m])",
-          "legendFormat": "safety blocks/min",
-          "refId": "C"
-        },
-        {
-          "expr": "rate(verifier_failures_total[5m])",
-          "legendFormat": "verifier failures/min",
-          "refId": "D"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "min": 0
-        }
-      },
-      "id": 3
-    }
-  ],
   "schemaVersion": 38,
   "version": 1,
-  "refresh": "30s"
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Stage p95 Latency (ms)",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "nl2sql:stage_p95_ms", "legendFormat": "{{stage}}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green" },
+              { "value": 1000, "color": "orange" },
+              { "value": 2000, "color": "red" }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 6 }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Pipeline OK Ratio (%)",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "nl2sql:pipeline_success_ratio * 100", "refId": "A" }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red" },
+              { "value": 90, "color": "orange" },
+              { "value": 97, "color": "green" }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Repair Success Rate (%)",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "nl2sql:repair_success_rate * 100", "refId": "A" }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red" },
+              { "value": 80, "color": "orange" },
+              { "value": 95, "color": "green" }
+            ]
+          }
+        }
+      },
+      "gridPos": { "x": 12, "y": 4, "w": 6, "h": 4 }
+    },
+    {
+      "id": 4,
+      "type": "gauge",
+      "title": "Cache Hit Ratio",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "nl2sql:cache_hit_ratio * 100", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red" },
+              { "value": 70, "color": "orange" },
+              { "value": 90, "color": "green" }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "gridPos": { "x": 0, "y": 6, "w": 6, "h": 4 }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Safety & Verifier Events (per min)",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "rate(safety_blocks_total[5m]) * 60", "legendFormat": "safety blocks", "refId": "A" },
+        { "expr": "rate(verifier_failures_total[5m]) * 60", "legendFormat": "verifier failures", "refId": "B" }
+      ],
+      "fieldConfig": {
+        "defaults": { "min": 0, "decimals": 0 }
+      },
+      "gridPos": { "x": 6, "y": 6, "w": 12, "h": 6 }
+    }
+  ]
 }
