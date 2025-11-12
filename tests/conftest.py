@@ -1,18 +1,24 @@
 import os
+import pytest
 from dotenv import load_dotenv
+from app.main import app
+from app.routers import nl2sql
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ENV_PATH = os.path.join(ROOT_DIR, ".env")
-load_dotenv(dotenv_path=ENV_PATH)
+# Load .env once for tests
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ENV_PATH = os.path.join(ROOT, ".env")
+load_dotenv(ENV_PATH)
+
+# --- Ensure fake OpenAI creds for CI/tests ---
+if not os.getenv("OPENAI_API_KEY"):
+    os.environ["OPENAI_API_KEY"] = os.getenv("PROXY_API_KEY", "DUMMY_TEST_KEY")
+if not os.getenv("OPENAI_BASE_URL") and os.getenv("PROXY_BASE_URL"):
+    os.environ["OPENAI_BASE_URL"] = os.getenv("PROXY_BASE_URL")
 
 
-# --- add: make tests independent of real OPENAI_* in CI ---
-def _ensure_openai_env_for_tests():
-    # map PROXY_* -> OPENAI_* or set a harmless dummy
-    if not os.getenv("OPENAI_API_KEY"):
-        os.environ["OPENAI_API_KEY"] = os.getenv("PROXY_API_KEY", "DUMMY_TEST_KEY")
-    if not os.getenv("OPENAI_BASE_URL") and os.getenv("PROXY_BASE_URL"):
-        os.environ["OPENAI_BASE_URL"] = os.environ["PROXY_BASE_URL"]
-
-
-_ensure_openai_env_for_tests()
+@pytest.fixture(autouse=True)
+def disable_api_key_auth():
+    """Disable X-API-Key auth for tests."""
+    app.dependency_overrides[nl2sql.require_api_key] = lambda: None
+    yield
+    app.dependency_overrides.clear()
