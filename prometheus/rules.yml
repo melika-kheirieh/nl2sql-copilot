@@ -1,49 +1,75 @@
 groups:
-- name: nl2sql_latency
+# 1) Recording rules (all derived metric calculations)
+- name: nl2sql_derived
+  interval: 15s
   rules:
-  # p95 latency per stage (5-minute window)
-  - record: nl2sql:stage_p95_ms
-    expr: |
-      histogram_quantile(
-        0.95,
-        sum(rate(stage_duration_ms_bucket[5m])) by (le, stage)
-      )
+    # p95 latency per stage (ms) — remove *1000 if histogram buckets are already in milliseconds
+    - record: nl2sql:stage_p95_ms
+      expr: |
+        histogram_quantile(
+          0.95,
+          sum by (le, stage) (rate(stage_duration_ms_bucket[5m]))
+        ) * 1000
 
-  # pipeline success ratio (5-minute rolling window)
-  - record: nl2sql:pipeline_success_ratio
-    expr: |
-      sum(rate(pipeline_runs_total{status="ok"}[5m]))
-      /
-      sum(rate(pipeline_runs_total[5m]))
+    # pipeline success ratio (0..1) — safe division to avoid divide-by-zero
+    - record: nl2sql:pipeline_success_ratio
+      expr: |
+        (
+          sum(rate(pipeline_runs_total{status="ok"}[5m]))
+        )
+        /
+        clamp_min(sum(rate(pipeline_runs_total[5m])), 1)
 
+    # repair success rate (0..1)
+    - record: nl2sql:repair_success_rate
+      expr: |
+        (
+          sum(rate(repair_attempts_total{outcome="success"}[5m]))
+        )
+        /
+        clamp_min(sum(rate(repair_attempts_total[5m])), 1)
+
+    # cache hit ratio (0..1)
+    - record: nl2sql:cache_hit_ratio
+      expr: |
+        (
+          sum(rate(cache_hits_total[5m]))
+        )
+        /
+        clamp_min(
+          sum(rate(cache_hits_total[5m])) + sum(rate(cache_misses_total[5m])),
+          1
+        )
+
+# 2) Alerts (must come after recording rules)
 - name: nl2sql_alerts
   rules:
-  # Alert: success ratio below 90% for 10 minutes
-  - alert: PipelineLowSuccessRatio
-    expr: nl2sql:pipeline_success_ratio < 0.9
-    for: 10m
-    labels:
-      severity: warning
-    annotations:
-      summary: "Pipeline success ratio dropped"
-      description: "Success ratio < 90% over the past 10 minutes"
+    # Success ratio < 90% for 10 minutes
+    - alert: PipelineLowSuccessRatio
+      expr: nl2sql:pipeline_success_ratio < 0.9
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Pipeline success ratio dropped"
+        description: "Success ratio < 90% over the past 10 minutes"
 
-  # Alert: high generator p95 latency (>1.5s for 5 minutes)
-  - alert: GeneratorLatencyHigh
-    expr: nl2sql:stage_p95_ms{stage="generator"} > 1500
-    for: 5m
-    labels:
-      severity: warning
-    annotations:
-      summary: "Generator p95 latency high"
-      description: "Generator p95 > 1.5s for 5 minutes"
+    # Generator p95 latency > 1.5s for 5 minutes
+    - alert: GeneratorLatencyHigh
+      expr: nl2sql:stage_p95_ms{stage="generator"} > 1500
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Generator p95 latency high"
+        description: "Generator p95 > 1.5s for 5 minutes"
 
-  # Alert: unusual spike in Safety blocks
-  - alert: SafetyBlocksSpike
-    expr: rate(safety_blocks_total[5m]) > 0.5
-    for: 5m
-    labels:
-      severity: info
-    annotations:
-      summary: "Unusual Safety block rate"
-      description: "Safety blocks rate > 0.5 per minute (check inputs or safety rules)"
+    # Safety blocks spike — per minute (not per second)
+    - alert: SafetyBlocksSpike
+      expr: rate(safety_blocks_total[5m]) * 60 > 0.5
+      for: 5m
+      labels:
+        severity: info
+      annotations:
+        summary: "Unusual Safety block rate"
+        description: "Safety blocks > 0.5 per minute (5m window)"

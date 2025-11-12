@@ -8,6 +8,11 @@ from adapters.db.sqlite_adapter import SQLiteAdapter
 
 from dataclasses import is_dataclass, asdict
 from typing import Any
+import yaml
+from pathlib import Path
+import os
+
+CONFIG_PATH = os.getenv("PIPELINE_CONFIG", "configs/sqlite_pipeline.yaml")
 
 
 def _is_dataclass_instance(x: Any) -> bool:
@@ -53,10 +58,20 @@ def dev_safety_check(body: SQLBody):
 def dev_verifier_check(body: SQLBody):
     """
     Run the Verifier stage directly on a raw SQL string
-    with a real adapter connection.
+    with a real adapter connection loaded from YAML config.
     """
+    config_path = Path(CONFIG_PATH)
+    if not config_path.exists():
+        raise HTTPException(status_code=500, detail="Config file not found")
+
     try:
-        adapter = SQLiteAdapter("data/chinook.db")
+        with config_path.open("r") as f:
+            config = yaml.safe_load(f)
+        dsn = config.get("adapter", {}).get("dsn")
+        if not dsn:
+            raise ValueError("Missing adapter.dsn in config file")
+
+        adapter = SQLiteAdapter(dsn)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Adapter init failed: {e}")
 

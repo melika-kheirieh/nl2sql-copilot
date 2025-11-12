@@ -8,7 +8,7 @@ repair: default
 
 adapter:
   kind: sqlite
-  dsn: data/chinook.db
+  dsn: data/Chinook_Sqlite.sqlite
 
 llm:
   provider: openai

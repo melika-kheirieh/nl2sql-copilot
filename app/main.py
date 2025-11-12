@@ -87,7 +87,9 @@ def readyz() -> str:
         else:
             from adapters.db.sqlite_adapter import SQLiteAdapter
 
-            sq = SQLiteAdapter(os.getenv("SQLITE_DB_PATH", "data/chinook.db"))
+            sq = SQLiteAdapter(
+                os.getenv("DEFAULT_SQLITE_PATH", "data/Chinook_Sqlite.sqlite")
+            )
             ping_fn = getattr(sq, "ping", None)
             if callable(ping_fn):
                 ping_fn()

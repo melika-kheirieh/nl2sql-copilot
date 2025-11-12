@@ -50,6 +50,17 @@ verifier_failures_total = Counter(
 )
 
 # -----------------------------------------------------------------------------
+#  Repair stage metrics
+# -----------------------------------------------------------------------------
+repair_attempts_total = Counter(
+    "repair_attempts_total",
+    "Number of repair loop attempts",
+    ["outcome"],  # success | failed
+    registry=REGISTRY,
+)
+
+
+# -----------------------------------------------------------------------------
 #  Pipeline-level metrics
 # -----------------------------------------------------------------------------
 pipeline_runs_total = Counter(
