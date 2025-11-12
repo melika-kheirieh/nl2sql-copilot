@@ -13,7 +13,7 @@ from nl2sql.executor import Executor
 from nl2sql.verifier import Verifier
 from nl2sql.repair import Repair
 from nl2sql.stubs import NoOpExecutor, NoOpRepair, NoOpVerifier
-from nl2sql.metrics import stage_duration_ms, pipeline_runs_total
+from nl2sql.metrics import stage_duration_ms, pipeline_runs_total, repair_attempts_total
 
 
 @dataclass(frozen=True)
@@ -369,7 +369,10 @@ class Pipeline:
                     if r_ver2.data and "sql" in r_ver2.data and r_ver2.data["sql"]:
                         sql = r_ver2.data["sql"]
                     if verified:
+                        repair_attempts_total.labels(outcome="success").inc()
                         break
+                    else:
+                        repair_attempts_total.labels(outcome="failed").inc()
 
             # --- 8) optional soft auto-verify (executor success, no details) ---
             if (verified is None or not verified) and not details:
