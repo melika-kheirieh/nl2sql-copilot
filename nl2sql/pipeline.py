@@ -35,6 +35,8 @@ class Pipeline:
       detector → planner → generator → safety → executor → verifier → (optional repair loop).
     """
 
+    SQL_REPAIR_STAGES = {"safety", "executor", "verifier"}
+
     def __init__(
         self,
         *,
@@ -118,7 +120,119 @@ class Pipeline:
             tb = traceback.format_exc()
             return StageResult(ok=False, data=None, trace=None, error=[f"{e}", tb])
 
-    # ------------------------------ run ------------------------------
+    def _run_with_repair(
+        self,
+        stage_name: str,
+        fn,
+        *,
+        repair_input_builder,
+        max_attempts: int = 1,
+        traces: list,
+        **kwargs,
+    ) -> StageResult:
+        """
+        Run a stage with per-stage repair + full observability integration.
+        SQL-only repair occurs for safety/executor/verifier.
+        Planner/Generator get log-only repair (trace only, no effect).
+        """
+        attempt = 0
+
+        while True:
+            # --- 1) Run stage normally ---
+            t0 = time.perf_counter()
+            r = self._safe_stage(fn, **kwargs)
+            dt = (time.perf_counter() - t0) * 1000.0
+
+            stage_duration_ms.labels(stage_name).observe(dt)
+
+            # attach stage trace
+            if getattr(r, "trace", None):
+                traces.append(r.trace.__dict__)
+            else:
+                traces.append(
+                    {
+                        "stage": stage_name,
+                        "duration_ms": dt,
+                        "summary": "ok" if r.ok else "failed",
+                        "notes": {},
+                    }
+                )
+
+            if r.ok:
+                return r
+
+            # stage failed → check repair availability
+            attempt += 1
+            if attempt > max_attempts:
+                return r
+
+            # --- 2) Build repair input ---
+            repair_args = repair_input_builder(r, kwargs)
+
+            # --- 3) Run repair (always logged) ---
+            repair_attempts_total.labels(outcome="attempt").inc()
+            t1 = time.perf_counter()
+            r_fix = self._safe_stage(self.repair.run, **repair_args)
+            dt_fix = (time.perf_counter() - t1) * 1000.0
+
+            stage_duration_ms.labels("repair").observe(dt_fix)
+
+            if getattr(r_fix, "trace", None):
+                traces.append(r_fix.trace.__dict__)
+            else:
+                traces.append(
+                    {
+                        "stage": "repair",
+                        "duration_ms": dt_fix,
+                        "summary": "ok" if r_fix.ok else "failed",
+                        "notes": {"stage": stage_name},
+                    }
+                )
+
+            if not r_fix.ok:
+                repair_attempts_total.labels(outcome="failed").inc()
+                return r  # repair itself failed → stop here
+
+            # --- 4) Only inject SQL if the stage is an SQL-producing stage ---
+            if stage_name in self.SQL_REPAIR_STAGES:
+                if "sql" in repair_args and "sql" in kwargs:
+                    kwargs["sql"] = (r_fix.data or {}).get("sql", kwargs["sql"])
+
+            # important: success metric must reflect if repair was applied meaningfully
+            if stage_name in self.SQL_REPAIR_STAGES:
+                repair_attempts_total.labels(outcome="success").inc()
+            else:
+                # log-only mode counts as a success-attempt but not semantic success
+                repair_attempts_total.labels(outcome="success").inc()
+
+            # for SQL stages, we re-run the stage again with modified kwargs
+            # for log-only stages, this simply loops and stage is re-run unchanged
+            # (which is correct)
+
+    @staticmethod
+    def _planner_repair_input_builder(stage_result, kwargs):
+        return {
+            "sql": "",
+            "error_msg": "; ".join(stage_result.error or ["planner_failed"]),
+            "schema_preview": kwargs.get("schema_preview", ""),
+        }
+
+    @staticmethod
+    def _generator_repair_input_builder(stage_result, kwargs):
+        return {
+            "sql": (stage_result.data or {}).get("sql", ""),
+            "error_msg": "; ".join(stage_result.error or ["generator_failed"]),
+            "schema_preview": kwargs.get("schema_preview", ""),
+        }
+
+    @staticmethod
+    def _sql_repair_input_builder(stage_result, kwargs):
+        return {
+            "sql": kwargs.get("sql", ""),
+            "error_msg": "; ".join(stage_result.error or ["stage_failed"]),
+            "schema_preview": kwargs.get("schema_preview", ""),
+        }
+
     def run(
         self,
         *,
@@ -173,8 +287,14 @@ class Pipeline:
 
             # --- 2) planner ---
             t0 = time.perf_counter()
-            r_plan = self._safe_stage(
-                self.planner.run, user_query=user_query, schema_preview=schema_preview
+            r_plan = self._run_with_repair(
+                "planner",
+                self.planner.run,
+                repair_input_builder=self._planner_repair_input_builder,
+                max_attempts=1,
+                user_query=user_query,
+                traces=traces,
+                schema_preview=schema_preview,
             )
             dt = (time.perf_counter() - t0) * 1000.0
             stage_duration_ms.labels("planner").observe(dt)
@@ -197,12 +317,16 @@ class Pipeline:
 
             # --- 3) generator ---
             t0 = time.perf_counter()
-            r_gen = self._safe_stage(
+            r_gen = self._run_with_repair(
+                "generator",
                 self.generator.run,
+                repair_input_builder=self._generator_repair_input_builder,
+                max_attempts=1,
                 user_query=user_query,
                 schema_preview=schema_preview,
                 plan_text=(r_plan.data or {}).get("plan"),
                 clarify_answers=clarify_answers,
+                traces=traces,
             )
             dt = (time.perf_counter() - t0) * 1000.0
             stage_duration_ms.labels("generator").observe(dt)
@@ -246,7 +370,14 @@ class Pipeline:
 
             # --- 4) safety ---
             t0 = time.perf_counter()
-            r_safe = self._safe_stage(self.safety.run, sql=sql)
+            r_safe = self._run_with_repair(
+                "safety",
+                self.safety.run,
+                repair_input_builder=self._sql_repair_input_builder,
+                max_attempts=1,
+                sql=sql,
+                traces=traces,
+            )
             dt = (time.perf_counter() - t0) * 1000.0
             stage_duration_ms.labels("safety").observe(dt)
             traces.extend(self._trace_list(r_safe))
@@ -271,7 +402,14 @@ class Pipeline:
 
             # --- 5) executor ---
             t0 = time.perf_counter()
-            r_exec = self._safe_stage(self.executor.run, sql=sql)
+            r_exec = self._run_with_repair(
+                "executor",
+                self.executor.run,
+                repair_input_builder=self._sql_repair_input_builder,
+                max_attempts=1,
+                sql=sql,
+                traces=traces,
+            )
             dt = (time.perf_counter() - t0) * 1000.0
             stage_duration_ms.labels("executor").observe(dt)
             traces.extend(self._trace_list(r_exec))
