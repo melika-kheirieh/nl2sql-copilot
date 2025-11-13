@@ -29,14 +29,13 @@ class FinalResult:
     traces: List[dict]
 
 
-SQL_REPAIR_STAGES = {"safety", "executor", "verifier"}
-
-
 class Pipeline:
     """
     NL2SQL Copilot pipeline:
       detector → planner → generator → safety → executor → verifier → (optional repair loop).
     """
+
+    SQL_REPAIR_STAGES = {"safety", "executor", "verifier"}
 
     def __init__(
         self,
@@ -377,7 +376,6 @@ class Pipeline:
                 repair_input_builder=self._sql_repair_input_builder,
                 max_attempts=1,
                 sql=sql,
-                schema_preview=schema_preview,
                 traces=traces,
             )
             dt = (time.perf_counter() - t0) * 1000.0
@@ -411,7 +409,6 @@ class Pipeline:
                 max_attempts=1,
                 sql=sql,
                 traces=traces,
-                schema_preview=schema_preview,
             )
             dt = (time.perf_counter() - t0) * 1000.0
             stage_duration_ms.labels("executor").observe(dt)
