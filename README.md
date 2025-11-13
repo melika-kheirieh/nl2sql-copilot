@@ -6,193 +6,348 @@ colorTo: blue
 sdk: docker
 pinned: false
 ---
-# 🧩 NL2SQL Copilot
 
+# 🧩 **NL2SQL Copilot — Natural-Language → Safe SQL**
 [![CI](https://github.com/melika-kheirieh/nl2sql-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/melika-kheirieh/nl2sql-copilot/actions/workflows/ci.yml)
 [![Docker](https://img.shields.io/badge/docker-ready-blue?logo=docker)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A production-grade **Text-to-SQL Copilot** that converts natural-language questions into **safe, verified SQL**.
-Built for analytics engineers who need accuracy, transparency, and control — powered by **FastAPI**, **LangGraph**, and **Pydantic-AI**.
+**Modular Text-to-SQL Copilot built with FastAPI & Pydantic-AI.**
+Generates *safe, verified, executable SQL* via a multi-stage agentic pipeline.
+Includes: self-repair, Spider benchmarks, Prometheus metrics, and a full demo UI.
+
+🚀 **Live Demo (Hugging Face Space):**
+👉 *(your HF link here)*
 
 ---
 
-## 🚀 Overview
+# **1) Quick Start**
 
-`NL2SQL Copilot` is an **agentic, modular pipeline** that plans, generates, verifies, and repairs SQL queries.
-It ensures correctness and safety through structured stages, evaluation on the **Spider** dataset, and full observability support.
-
-> 💡 Designed for **read-only production databases** with **self-repair**, **metrics**, and **CI/CD** baked in.
-
----
-
-## 🧠 Agentic Architecture
-
+```bash
+git clone https://github.com/melika-kheirieh/nl2sql-copilot
+cd nl2sql-copilot
+make setup      # install deps
+make run        # start API + UI
 ```
 
-Natural Language
-↓
-[ Detector ]
-↓
-[ Planner ]
-↓
-[ Generator (LLM) ]
-↓
-[ Safety ]
-↓
-[ Executor ]
-↓
-[ Verifier ]
-↓
-[ Repair ]
-
-````
-
-Each stage is isolated, configurable via YAML, and observable through structured traces and Prometheus metrics.
-
-| Stage | Responsibility |
-|--------|----------------|
-| **Detector** | Identify whether a query is Text-to-SQL |
-| **Planner** | Extract user intent and SQL plan |
-| **Generator** | Call LLM to synthesize SQL |
-| **Safety** | Block unsafe or non-SELECT queries |
-| **Executor** | Execute query in read-only sandbox |
-| **Verifier** | Compare results, detect mismatch |
-| **Repair** | Self-healing loop triggered on failure |
+Open:
+👉 [http://localhost:8000](http://localhost:8000)
+👉 [http://localhost:8000/docs](http://localhost:8000/docs) (Swagger UI)
 
 ---
 
-## 📊 Benchmark (Spider dataset)
+# **2) Demo (Gradio UI)**
 
-Dataset: [Spider](https://yale-lily.github.io/spider) by Yale LILY Lab.
-Evaluated on the **Spider dev subset (20 samples)** using the reproducible evaluation toolkit.
+The live UI supports:
 
-| Metric | Value |
-|--------|--------|
-| EM (Exact Match) | 0.15 |
-| SM (Structural Match) | 0.70 |
-| ExecAcc (Execution Accuracy) | 0.73 |
-| Avg Latency | 8.11 s |
-| p50 Latency | 9.42 s |
-| p95 Latency | 13.88 s |
+* Uploading a SQLite database
+* Asking natural-language questions
+* Viewing generated SQL
+* Viewing execution results
+* Full trace per pipeline stage
+* Example queries for quick testing
+* No need to upload a DB for the demo (ships with a small example DB)
 
-> High **Structural Match** and **Execution Accuracy** indicate strong semantic correctness;
-> lower EM reflects harmless formatting differences.
+Everything runs through the same agentic backend as the API.
 
-Run reproducible benchmarks:
+---
+
+# **3) Architecture Overview**
+
+```
+user query
+    ↓
+detector      (ambiguous? dataset missing?)
+planner       (task decomposition + schema reasoning)
+generator     (SQL generation)
+safety        (SELECT-only, no mutations)
+executor      (SQLiteAdapter with sandboxing)
+verifier      (semantic + execution checks)
+repair        (minimal-diff SQL repair loop)
+    ↓
+final SQL + result + traces
+```
+
+### 🔧 Technical Stack
+
+* **FastAPI** — HTTP API
+* **Pydantic-AI** — agentic stages
+* **SQLiteAdapter** — isolated DB execution
+* **Prometheus** — metrics
+* **Grafana** — dashboard
+* **Makefile + pytest + mypy** — dev workflow
+
+The entire pipeline is modular; each stage has a clean interface and can be swapped (e.g., planner or generator model).
+
+---
+
+# **4) Key Features**
+
+### ✔ Multi-Stage Agentic Pipeline
+
+Planner → Generator → Safety → Executor → Verifier → Repair.
+
+### ✔ Safety by Design
+
+* Only `SELECT` queries allowed
+* Column/table validation
+* No multi-table hallucination
+* Deterministic schema preview
+
+### ✔ Repair Loop
+
+Automatically fixes malformed or non-executable SQL using minimal edits and retries.
+
+### ✔ Caching
+
+* TTL-based
+* Exact query deduplication
+* Miss/hit metrics
+
+### ✔ Observability
+
+* Per-stage latency
+* Pipeline success ratio
+* Repair success rate
+* p95 latency
+* Cache hit ratio
+* Full Grafana dashboard
+
+### ✔ Spider Benchmarks
+
+Reproducible evaluation on Spider (dev split).
+Comes with plotting utilities, histogram, latency per stage, and summary.json.
+
+---
+
+باشه—الان **همین بخش Benchmarks که ساختم** را برایت
+**کاملاً آمادهٔ قرار گرفتن در README** می‌کنم:
+
+* با heading درست
+* با anchor مناسب
+* با ساختار کاملاً هم‌تراز با بقیهٔ README تو
+* با badge
+* بدون هیچ وابستگی اضافی
+* ۱۰۰٪ کپی‌ـ‌پیست مستقیم
+
+این نسخه **نهایی، آمادهٔ چسباندن** است:
+
+---
+
+# 📊 Benchmarks (Spider dev, 20 samples)
+
+[![Benchmarks](https://img.shields.io/badge/Benchmarks-Spider%20dev-blue)](#benchmarks-spider-dev-20-samples)
+
+This copilot is evaluated on a 20-sample slice of the Spider **dev** split
+(focused on the `concert_singer` schema) using the production pipeline end-to-end.
+
+### 🧮 Summary
+
+- **Total samples:** 20
+- **Successful runs:** 20 / 20 (**100%**)
+- **Exact Match (EM):** **0.10**
+- **Structural Match (SM):** **0.70**
+- **Execution Accuracy (ExecAcc):** **0.725**
+
+These results reflect a *production-oriented Text-to-SQL system*:
+the model optimizes for **valid, executable SQL**, not strict syntactic match.
+
+---
+
+### ⏱ Latency
+
+End-to-end pipeline time (all stages):
+
+- **Avg latency:** ~**8066 ms**
+- **p50 latency:** ~**9229 ms**
+- **p95 latency:** ~**14936 ms**
+
+Latency distribution is **bimodal**:
+1) fast lookups,
+2) multi-hop reasoning dominated by the planner stage.
+
+(See `latency_histogram.png` in the benchmark folder.)
+
+---
+
+### ⚙️ Per-Stage Latency (from Prometheus histograms)
+
+| Stage      | Avg latency (ms) |
+|------------|------------------|
+| detector   | ~1               |
+| planner    | ~8360            |
+| generator  | ~1645            |
+| safety     | ~2               |
+| executor   | ~1               |
+| verifier   | ~1               |
+| repair     | ~1200            |
+
+The **planner** is the dominant contributor—expected for a reasoning-heavy
+agentic pipeline. Safety/executor/verifier remain **single-digit ms**.
+
+---
+
+### ❌ Failure Modes (Why EM is low but ExecAcc is high)
+
+Even when EM=0, **SM و ExecAcc غالباً 1.0** هستند.
+
+Typical causes:
+
+- Column name capitalization differences
+- Different LIMIT usage
+- Different column order
+- Aliases not matching the gold query
+- Spider gold query being `EMPTY`, but the model (correctly) infers a SQL query
+
+In real systems, **execution correctness** matters more than literal match.
+
+---
+
+### 📂 Reproducibility
+
+Run the exact same benchmark:
 
 ```bash
 export SPIDER_ROOT="$PWD/data/spider"
-PYTHONPATH=$PWD python benchmarks/evaluate_spider_pro.py --spider --split dev --limit 20
-PYTHONPATH=$PWD python benchmarks/plot_results.py
+
+PYTHONPATH=$PWD \
+  python benchmarks/evaluate_spider_pro.py --spider --split dev --limit 20 --debug
+
+PYTHONPATH=$PWD \
+  python benchmarks/plot_results.py
 ````
 
-Results & plots → `benchmarks/results_pro/20251109-171247/`
+Artifacts stored under:
 
-![Metrics Overview](benchmarks/results_pro/20251109-171247/metrics_overview.png)
+```
+benchmarks/results_pro/20251113-113600/
+    summary.json
+    eval.jsonl
+    metrics_overview.png
+    latency_histogram.png
+    latency_per_stage.png
+    errors_overview.png
+```
 
----
-
-## ⚙️ Key Features
-
-✅ **Agentic architecture** – multi-stage pipeline with feedback loop
-
-🛡️ **Safety layer** – SELECT-only guardrails and AST validation
-
-🔁 **Self-repair** – automatic retry when verification fails
-
-📊 **Reproducible evaluation** – integrated Spider / Dr.Spider benchmarking
-
-📦 **Config-driven design** – YAML pipeline factory
-
-🧩 **Plug-and-play adapters** – SQLite / PostgreSQL / OpenAI / Anthropic / Ollama
-
-🧠 **FastAPI service + Streamlit UI** – demo or API mode
-
-🧰 **CI/CD ready** – Makefile, Ruff, Mypy, Pytest, Docker, GitHub Actions
-
-📈 **Observability stack** – Prometheus & Grafana metrics for latency and errors
+These plots are directly embedded into the README if needed.
 
 ---
 
-## 🧩 Observability & GenAIOps
+# **6) API Usage**
 
-Monitor every stage of the pipeline in real-time:
-
-* `/metrics` endpoint exposed via FastAPI
-* Prometheus + Grafana stack with `make obs-up`
-* Metrics tracked:
-
-  * `nl2sql_stage_latency_ms`
-  * `nl2sql_stage_error_total`
-  * `nl2sql_query_exec_count`
-  * `nl2sql_repair_success_rate`
+## 🔍 NL → SQL
 
 ```bash
-make obs-up      # start Prometheus + Grafana
-make obs-down    # stop the stack
+curl -X POST "http://localhost:8000/api/v1/nl2sql" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: dev-key" \
+  -d '{
+        "query": "Top 5 customers by total invoice amount",
+        "db_id": null
+      }'
+```
+
+Sample response:
+
+```json
+{
+  "ambiguous": false,
+  "sql": "...",
+  "rationale": "...",
+  "result": [...],
+  "traces": [
+    {"stage": "detector", "duration_ms": 1},
+    {"stage": "planner", "duration_ms": 8943},
+    {"stage": "generator", "duration_ms": 1722},
+    {"stage": "safety", "duration_ms": 2},
+    {"stage": "executor", "duration_ms": 1},
+    {"stage": "verifier", "duration_ms": 1},
+    {"stage": "repair", "duration_ms": 522}
+  ]
+}
 ```
 
 ---
 
-## 🧪 Quick Start
-
-### 1️⃣ Clone & Run
+## 📤 Upload SQLite DB
 
 ```bash
-git clone https://github.com/melika-kheirieh/nl2sql-copilot.git
-cd nl2sql-copilot
-make run
+curl -X POST "http://localhost:8000/api/v1/nl2sql/upload_db" \
+  -H "X-API-Key: dev-key" \
+  -F "file=@/path/to/db.sqlite"
 ```
 
-Or build with Docker:
+Response:
+
+```json
+{
+  "db_id": "9a21d49f-38d3-4ce0-a459-3688e02fd44a",
+  "message": "Database uploaded successfully."
+}
+```
+
+---
+
+## 📑 Schema Preview
 
 ```bash
-docker build -t nl2sql-copilot .
-docker run --rm -p 8000:8000 nl2sql-copilot
+curl "http://localhost:8000/api/v1/nl2sql/schema?db_id=<uuid>" \
+  -H "X-API-Key: dev-key"
 ```
 
-API available at [http://localhost:8000/docs](http://localhost:8000/docs)
-Streamlit demo at [http://localhost:7860](http://localhost:7860)
+---
+
+## ⚙️ Environment Variables
+
+| Variable               | Purpose                           |
+| ---------------------- | --------------------------------- |
+| `API_KEYS`             | Comma-separated auth keys         |
+| `DEV_MODE`             | Enables strict ambiguity detector |
+| `NL2SQL_CACHE_TTL_SEC` | Cache TTL                         |
+| `NL2SQL_CACHE_MAX`     | Cache size                        |
+| `SPIDER_ROOT`          | Spider dataset path               |
+| `USE_MOCK`             | Skip DB execution                 |
 
 ---
 
-## 🧭 For Developers & CI/CD
+# **7) Future Work**
 
-```bash
-make lint          # Ruff
-make typecheck     # Mypy
-make test          # Pytest
-make bench         # Run benchmark suite
-```
+The copilot is intentionally kept lean. Several scoped enhancements are planned:
 
-### CI/CD Highlights
+### 1) Streaming SQL (SSE)
 
-* Runs on GitHub Actions (`make check`)
-* Enforces formatting, typing, tests, and Docker build
-* Publishes Docker image to GHCR on successful merge
+Show partial SQL generation live.
+
+### 2) Redis Distributed Cache
+
+Shared cache across replicas, eviction, warm-ups.
+
+### 3) Multi-Model Planner/Generator
+
+Support OpenAI, vLLM, LLaMA, hybrid pipelines.
+
+### 4) A/B Testing Framework
+
+Compare prompts/models with automated drift tracking.
+
+### 5) Schema Embeddings
+
+Vector-based reasoning for table/column retrieval.
+
+### 6) Nightly CI Benchmarks
+
+GitHub Actions → run Spider → save plots → detect drift.
+
+### 7) Stronger Diff-based Repair
+
+Trace-aware SQL recovery with history logging.
+
+### 8) Deployment Template
+
+Helm chart / compose stack for production rollout.
 
 ---
 
-## 🎯 Why it matters
+# **8) License**
 
-* Bridges **natural language and databases** with measurable reliability
-* Provides **reproducible evaluation** for continuous model tracking
-* Delivers **production-level resilience** via self-repair and observability
-* Demonstrates **AI software engineering** beyond prompt design
-
----
-
-## 👤 Author
-
-**Melika Kheirieh**
-AI Engineer & Researcher in Natural Language Interfaces for Databases
-[GitHub](https://github.com/melika-kheirieh) · [LinkedIn](https://www.linkedin.com/in/melika-kheirieh-03a7b5176/)
-
-> This project evolved from [NL2SQL Copilot Prototype](https://github.com/melika-kheirieh/nl2sql-copilot-prototype), refactored into a production-grade, modular agent.
-
----
-
-## 📄 License
-
-MIT © 2025 Melika Kheirieh
+MIT License.
