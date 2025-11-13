@@ -110,7 +110,7 @@ def upload_db(file_obj):
 
 def query_to_sql(user_query: str, db_id: str | None, _debug_flag: bool):
     if not user_query.strip():
-        return "❌ Please enter a query.", "", "", {}, [], [], "", []
+        return "❌ Please enter a query.", "", "", {}, [], []
 
     data = call_pipeline_api_or_mock(user_query, db_id)
     sql = data.get("sql") or ""
@@ -128,7 +128,8 @@ def query_to_sql(user_query: str, db_id: str | None, _debug_flag: bool):
     if trace_list and all("duration_ms" in t for t in trace_list):
         timings_table = [[t["stage"], t["duration_ms"]] for t in trace_list]
 
-    return badges_text, sql, explanation, result, trace_list, [], "", timings_table
+    # Note: repair candidates / diff are not exposed in the UI yet.
+    return badges_text, sql, explanation, result, trace_list, timings_table
 
 
 def build_ui() -> gr.Blocks:
@@ -149,6 +150,18 @@ def build_ui() -> gr.Blocks:
             debug = gr.Checkbox(label="Debug (UI only)", value=True, scale=1)
             run = gr.Button("Run")
 
+        # Example queries to make the demo easier to explore
+        gr.Examples(
+            examples=[
+                ["List all artists"],
+                ["Top 5 customers by total invoice amount"],
+                ["Total number of tracks per genre"],
+                ["Top 3 albums by total sales"],
+            ],
+            inputs=[q],
+            label="Try these example queries",
+        )
+
         badges = gr.Markdown()
         sql_out = gr.Code(label="Final SQL", language="sql")
         exp_out = gr.Textbox(label="Explanation", lines=3)
@@ -160,11 +173,29 @@ def build_ui() -> gr.Blocks:
             trace = gr.JSON(label="Stage trace")
 
         with gr.Tab("Repair"):
-            repair_candidates = gr.JSON(label="Candidates")
-            repair_diff = gr.Textbox(label="Diff (if any)", lines=10)
+            gr.Markdown(
+                """
+                ### Repair & self-healing (pipeline-level)
+
+                The repair loop is fully implemented in the backend:
+
+                * If a candidate SQL fails safety or execution checks,
+                  the pipeline attempts to **repair** it.
+                * All repair attempts and outcomes are tracked in Prometheus
+                  (for example, `nl2sql_repair_attempts_total` and related rates).
+
+                For now, detailed before/after SQL diff and repair candidates
+                are exposed via trace logs and metrics dashboards.
+
+                This tab is reserved for a future, richer UI:
+                side-by-side SQL diff, repair candidates, and explanations.
+                """
+            )
 
         with gr.Tab("Timings"):
-            timings = gr.Dataframe(headers=["metric", "ms"], datatype=["str", "number"])
+            timings = gr.Dataframe(
+                headers=["stage", "duration_ms"], datatype=["str", "number"]
+            )
 
         run.click(
             query_to_sql,
@@ -175,8 +206,6 @@ def build_ui() -> gr.Blocks:
                 exp_out,
                 res_out,
                 trace,
-                repair_candidates,
-                repair_diff,
                 timings,
             ],
         )
