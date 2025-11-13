@@ -6,18 +6,18 @@ colorTo: blue
 sdk: docker
 pinned: false
 ---
-
 # 🧩 **NL2SQL Copilot — Natural-Language → Safe SQL**
 [![CI](https://github.com/melika-kheirieh/nl2sql-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/melika-kheirieh/nl2sql-copilot/actions/workflows/ci.yml)
 [![Docker](https://img.shields.io/badge/docker-ready-blue?logo=docker)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Modular Text-to-SQL Copilot built with FastAPI & Pydantic-AI.**
-Generates *safe, verified, executable SQL* via a multi-stage agentic pipeline.
-Includes: self-repair, Spider benchmarks, Prometheus metrics, and a full demo UI.
 
-🚀 **Live Demo (Hugging Face Space):**
-👉 *(your HF link here)*
+**Modular Text-to-SQL Copilot built with FastAPI & Pydantic-AI.**
+Generates *safe, verified, executable SQL* through a multi-stage agentic pipeline.
+Includes: schema introspection, self-repair, Spider benchmarks, Prometheus metrics, and a full demo UI.
+
+🚀 **Live Demo:**
+👉 **[https://huggingface.co/spaces/melika-kheirieh/nl2sql-copilot](https://huggingface.co/spaces/melika-kheirieh/nl2sql-copilot)**
 
 ---
 
@@ -26,186 +26,190 @@ Includes: self-repair, Spider benchmarks, Prometheus metrics, and a full demo UI
 ```bash
 git clone https://github.com/melika-kheirieh/nl2sql-copilot
 cd nl2sql-copilot
-make setup      # install deps
-make run        # start API + UI
+make setup       # install dependencies
+make run         # start API + Gradio UI
 ```
 
 Open:
-👉 [http://localhost:8000](http://localhost:8000)
-👉 [http://localhost:8000/docs](http://localhost:8000/docs) (Swagger UI)
+
+* [http://localhost:8000](http://localhost:8000) (FastAPI Swagger UI)
+* [http://localhost:7860](http://localhost:7860) (Gradio Demo)
 
 ---
 
 # **2) Demo (Gradio UI)**
 
-The live UI supports:
+The demo supports:
 
-* Uploading a SQLite database
+* Uploading any SQLite database
 * Asking natural-language questions
 * Viewing generated SQL
-* Viewing execution results
-* Full trace per pipeline stage
-* Example queries for quick testing
-* No need to upload a DB for the demo (ships with a small example DB)
+* Viewing query results
+* Full multi-stage trace (detector → planner → generator → safety → executor → verifier → repair)
+* Per-stage timings
+* Example queries
+* And a default demo DB (no upload required)
 
-Everything runs through the same agentic backend as the API.
+Everything runs on the same backend as the API.
 
 ---
 
-# **3) Architecture Overview**
+# **3) Agentic Architecture**
 
 ```
 user query
     ↓
-detector      (ambiguous? dataset missing?)
-planner       (task decomposition + schema reasoning)
+detector      (ambiguity, missing info)
+planner       (schema reasoning + task decomposition)
 generator     (SQL generation)
-safety        (SELECT-only, no mutations)
-executor      (SQLiteAdapter with sandboxing)
+safety        (SELECT-only validation)
+executor      (sandboxed DB execution)
 verifier      (semantic + execution checks)
 repair        (minimal-diff SQL repair loop)
     ↓
 final SQL + result + traces
 ```
 
-### 🔧 Technical Stack
+### ⚙️ Tech Stack
 
-* **FastAPI** — HTTP API
-* **Pydantic-AI** — agentic stages
-* **SQLiteAdapter** — isolated DB execution
-* **Prometheus** — metrics
-* **Grafana** — dashboard
-* **Makefile + pytest + mypy** — dev workflow
+* FastAPI
+* Pydantic-AI
+* SQLiteAdapter
+* Prometheus + Grafana
+* pytest + mypy + Makefile
+* Gradio UI
 
-The entire pipeline is modular; each stage has a clean interface and can be swapped (e.g., planner or generator model).
+The pipeline is fully modular: each stage has a clean, swappable interface.
 
 ---
 
-# **4) Key Features**
+# **4) Evolution (Prototype → Copilot)**
 
-### ✔ Multi-Stage Agentic Pipeline
+This project is the **second-generation, production-grade** version of an earlier prototype:
+👉 [https://github.com/melika-kheirieh/nl2sql-copilot-prototype](https://github.com/melika-kheirieh/nl2sql-copilot-prototype)
+
+The prototype explored single-step, prompt-based SQL generation.
+The current version is a **complete architectural redesign**, adding:
+
+* multi-stage agentic pipeline
+* schema introspection
+* safety guardrails
+* self-repair loop
+* caching
+* observability
+* Spider benchmarks
+* multi-DB support with upload + TTL handling
+
+This repository is the first **end-to-end, production-oriented** version.
+
+---
+
+# **5) Key Features**
+
+### ✔ Agentic Pipeline
 
 Planner → Generator → Safety → Executor → Verifier → Repair.
 
+### ✔ Schema-Aware
+
+Automatic schema preview for any uploaded SQLite database.
+
 ### ✔ Safety by Design
 
-* Only `SELECT` queries allowed
+* SELECT-only
 * Column/table validation
-* No multi-table hallucination
-* Deterministic schema preview
+* No multi-statement SQL
+* Prevents schema hallucination
 
-### ✔ Repair Loop
+### ✔ Self-Repair
 
-Automatically fixes malformed or non-executable SQL using minimal edits and retries.
+Automatic minimal-diff correction when SQL fails.
 
 ### ✔ Caching
 
-* TTL-based
-* Exact query deduplication
-* Miss/hit metrics
+TTL-based, with key = (db_id, normalized_query, schema_hash).
+Hit/miss metrics included.
 
 ### ✔ Observability
 
 * Per-stage latency
 * Pipeline success ratio
 * Repair success rate
-* p95 latency
 * Cache hit ratio
+* p95 latency
 * Full Grafana dashboard
 
-### ✔ Spider Benchmarks
+### ✔ Benchmarks
 
-Reproducible evaluation on Spider (dev split).
-Comes with plotting utilities, histogram, latency per stage, and summary.json.
-
----
-
-باشه—الان **همین بخش Benchmarks که ساختم** را برایت
-**کاملاً آمادهٔ قرار گرفتن در README** می‌کنم:
-
-* با heading درست
-* با anchor مناسب
-* با ساختار کاملاً هم‌تراز با بقیهٔ README تو
-* با badge
-* بدون هیچ وابستگی اضافی
-* ۱۰۰٪ کپی‌ـ‌پیست مستقیم
-
-این نسخه **نهایی، آمادهٔ چسباندن** است:
+Reproducible Spider evaluation with plots + summary.
 
 ---
 
-# 📊 Benchmarks (Spider dev, 20 samples)
+# **6) Benchmarks (Spider dev, 20 samples)**
 
-[![Benchmarks](https://img.shields.io/badge/Benchmarks-Spider%20dev-blue)](#benchmarks-spider-dev-20-samples)
+[![Benchmarks](https://img.shields.io/badge/Benchmarks-Spider%20dev-blue)](#benchmarks)
 
-This copilot is evaluated on a 20-sample slice of the Spider **dev** split
-(focused on the `concert_singer` schema) using the production pipeline end-to-end.
+Evaluated on a curated 20-sample subset of the Spider **dev** split
+(focused on `concert_singer`), using the full production pipeline.
 
 ### 🧮 Summary
 
-- **Total samples:** 20
-- **Successful runs:** 20 / 20 (**100%**)
-- **Exact Match (EM):** **0.10**
-- **Structural Match (SM):** **0.70**
-- **Execution Accuracy (ExecAcc):** **0.725**
+* **Total samples:** 20
+* **Successful runs:** 20/20 (**100%**)
+* **Exact Match (EM):** **0.10**
+* **Structural Match (SM):** **0.70**
+* **Execution Accuracy:** **0.725**
 
-These results reflect a *production-oriented Text-to-SQL system*:
-the model optimizes for **valid, executable SQL**, not strict syntactic match.
+This reflects a *production-oriented* NL2SQL system:
+the model optimizes for **executable SQL**, not literal gold-string alignment.
 
 ---
 
 ### ⏱ Latency
 
-End-to-end pipeline time (all stages):
+* **Avg latency:** ~**8066 ms**
+* **p50:** ~**9229 ms**
+* **p95:** ~**14936 ms**
 
-- **Avg latency:** ~**8066 ms**
-- **p50 latency:** ~**9229 ms**
-- **p95 latency:** ~**14936 ms**
-
-Latency distribution is **bimodal**:
-1) fast lookups,
-2) multi-hop reasoning dominated by the planner stage.
-
-(See `latency_histogram.png` in the benchmark folder.)
+Latency is **bimodal**:
+simple queries → fast, reasoning-heavy queries → planner-dominated.
 
 ---
 
-### ⚙️ Per-Stage Latency (from Prometheus histograms)
+### ⚙️ Per-Stage Latency
 
-| Stage      | Avg latency (ms) |
-|------------|------------------|
-| detector   | ~1               |
-| planner    | ~8360            |
-| generator  | ~1645            |
-| safety     | ~2               |
-| executor   | ~1               |
-| verifier   | ~1               |
-| repair     | ~1200            |
+| Stage     | Avg latency (ms) |
+| --------- | ---------------- |
+| detector  | ~1               |
+| planner   | ~8360            |
+| generator | ~1645            |
+| safety    | ~2               |
+| executor  | ~1               |
+| verifier  | ~1               |
+| repair    | ~1200            |
 
-The **planner** is the dominant contributor—expected for a reasoning-heavy
-agentic pipeline. Safety/executor/verifier remain **single-digit ms**.
+Planner is the main bottleneck (expected for schema-level reasoning).
+Safety/executor/verifier stay **single-digit ms**.
 
 ---
 
-### ❌ Failure Modes (Why EM is low but ExecAcc is high)
+### ❌ Failure Modes (Why EM is low)
 
-Even when EM=0, **SM و ExecAcc غالباً 1.0** هستند.
+Even when EM = 0, **SM and ExecAcc are often 1.0**.
 
 Typical causes:
 
-- Column name capitalization differences
-- Different LIMIT usage
-- Different column order
-- Aliases not matching the gold query
-- Spider gold query being `EMPTY`, but the model (correctly) infers a SQL query
+* Capitalization differences (`Age` vs `age`)
+* Different column ordering
+* LIMIT differences
+* Alias mismatch
+* Gold SQL is `EMPTY` but the model infers a valid SQL
 
-In real systems, **execution correctness** matters more than literal match.
+In real-world systems, **execution correctness matters more than exact string match**.
 
 ---
 
-### 📂 Reproducibility
-
-Run the exact same benchmark:
+### 📂 Reproducing the Benchmark
 
 ```bash
 export SPIDER_ROOT="$PWD/data/spider"
@@ -215,12 +219,12 @@ PYTHONPATH=$PWD \
 
 PYTHONPATH=$PWD \
   python benchmarks/plot_results.py
-````
+```
 
-Artifacts stored under:
+Artifacts saved under:
 
 ```
-benchmarks/results_pro/20251113-113600/
+benchmarks/results_pro/<timestamp>/
     summary.json
     eval.jsonl
     metrics_overview.png
@@ -229,11 +233,9 @@ benchmarks/results_pro/20251113-113600/
     errors_overview.png
 ```
 
-These plots are directly embedded into the README if needed.
-
 ---
 
-# **6) API Usage**
+# **7) API Usage**
 
 ## 🔍 NL → SQL
 
@@ -247,43 +249,42 @@ curl -X POST "http://localhost:8000/api/v1/nl2sql" \
       }'
 ```
 
-Sample response:
+### ✔ Sample Response (accurate)
 
 ```json
 {
   "ambiguous": false,
-  "sql": "...",
-  "rationale": "...",
-  "result": [...],
+  "sql": "SELECT ...",
+  "rationale": "Explanation of why this SQL was generated.",
+  "result": {
+    "rows": 5,
+    "columns": ["CustomerId", "Total"],
+    "rows_data": [
+      [1, 39.6],
+      [2, 38.7],
+      [3, 35.4]
+    ]
+  },
   "traces": [
     {"stage": "detector", "duration_ms": 1},
-    {"stage": "planner", "duration_ms": 8943},
-    {"stage": "generator", "duration_ms": 1722},
-    {"stage": "safety", "duration_ms": 2},
+    {"stage": "planner",  "duration_ms": 8943},
+    {"stage": "generator","duration_ms": 1722},
+    {"stage": "safety",   "duration_ms": 2},
     {"stage": "executor", "duration_ms": 1},
     {"stage": "verifier", "duration_ms": 1},
-    {"stage": "repair", "duration_ms": 522}
+    {"stage": "repair",   "duration_ms": 522}
   ]
 }
 ```
 
 ---
 
-## 📤 Upload SQLite DB
+## 📁 Upload a SQLite DB
 
 ```bash
 curl -X POST "http://localhost:8000/api/v1/nl2sql/upload_db" \
   -H "X-API-Key: dev-key" \
   -F "file=@/path/to/db.sqlite"
-```
-
-Response:
-
-```json
-{
-  "db_id": "9a21d49f-38d3-4ce0-a459-3688e02fd44a",
-  "message": "Database uploaded successfully."
-}
 ```
 
 ---
@@ -297,57 +298,43 @@ curl "http://localhost:8000/api/v1/nl2sql/schema?db_id=<uuid>" \
 
 ---
 
-## ⚙️ Environment Variables
+# **8) Environment Variables**
 
-| Variable               | Purpose                           |
-| ---------------------- | --------------------------------- |
-| `API_KEYS`             | Comma-separated auth keys         |
-| `DEV_MODE`             | Enables strict ambiguity detector |
-| `NL2SQL_CACHE_TTL_SEC` | Cache TTL                         |
-| `NL2SQL_CACHE_MAX`     | Cache size                        |
-| `SPIDER_ROOT`          | Spider dataset path               |
-| `USE_MOCK`             | Skip DB execution                 |
+| Variable               | Purpose                                  |
+| ---------------------- | ---------------------------------------- |
+| `API_KEYS`             | Comma-separated list of backend API keys |
+| `API_KEY`              | Used by Gradio UI to call the backend    |
+| `DEV_MODE`             | Enables strict ambiguity detection       |
+| `NL2SQL_CACHE_TTL_SEC` | Cache TTL                                |
+| `NL2SQL_CACHE_MAX`     | Max cache entries                        |
+| `SPIDER_ROOT`          | Path to Spider dataset                   |
+| `USE_MOCK`             | Skip execution (for testing)             |
+
+> Gradio uses `API_KEY` → backend expects it as `X-API-Key`.
+> Backend accepts multiple keys via `API_KEYS`.
 
 ---
 
-# **7) Future Work**
+# **9) Future Work**
 
-The copilot is intentionally kept lean. Several scoped enhancements are planned:
-
-### 1) Streaming SQL (SSE)
-
-Show partial SQL generation live.
+### 1) Streaming SQL Generation (SSE)
 
 ### 2) Redis Distributed Cache
 
-Shared cache across replicas, eviction, warm-ups.
-
 ### 3) Multi-Model Planner/Generator
-
-Support OpenAI, vLLM, LLaMA, hybrid pipelines.
 
 ### 4) A/B Testing Framework
 
-Compare prompts/models with automated drift tracking.
-
 ### 5) Schema Embeddings
-
-Vector-based reasoning for table/column retrieval.
 
 ### 6) Nightly CI Benchmarks
 
-GitHub Actions → run Spider → save plots → detect drift.
+### 7) Advanced Repair (diff-based)
 
-### 7) Stronger Diff-based Repair
-
-Trace-aware SQL recovery with history logging.
-
-### 8) Deployment Template
-
-Helm chart / compose stack for production rollout.
+### 8) Helm / Compose Deployment Template
 
 ---
 
-# **8) License**
+# **10) License**
 
 MIT License.

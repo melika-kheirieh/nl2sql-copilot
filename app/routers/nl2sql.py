@@ -384,12 +384,24 @@ def nl2sql_handler(
 
     # Success path → 200 (coerce/standardize traces for API)
     traces = [_round_trace(t) for t in (result.traces or [])]
+
+    # Normalize execution result (if executor attached one)
+    response_result: Dict[str, Any] = {}
+    raw_result = getattr(result, "result", None)
+    if raw_result is not None:
+        if isinstance(raw_result, dict):
+            response_result = raw_result
+        else:
+            response_result = cast(Dict[str, Any], _to_dict(raw_result))
+
     payload = NL2SQLResponse(
         ambiguous=False,
         sql=result.sql,
         rationale=result.rationale,
         traces=traces,
+        result=response_result,
     )
+
     # store in cache
     _CACHE[ck] = (time.time(), cast(Dict[str, Any], payload.model_dump()))
     return payload
