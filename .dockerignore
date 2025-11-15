@@ -1,24 +1,23 @@
+# Ignore all data except demo.db
+data/*
+!data/demo.db
+
+# Python cache
+__pycache__
+*.pyc
+
+# Git
 .git
 .gitignore
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.venv/
-.env
+
+# Local environments
+venv/
+.env/
 .env.*
-data/
-benchmarks/data/
+
+# Other files you don't want in Docker context
+.vscode/
+.idea/
 dist/
 build/
-.wheels/
-*.sqlite
-*.db
-tests/
-benchmarks/results*/
-data/spider/
-docs/
-.pytest_cache/
+coverage/

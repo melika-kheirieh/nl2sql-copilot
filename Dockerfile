@@ -1,14 +1,15 @@
 FROM python:3.12-slim
 
-ENV PIP_NO_CACHE_DIR=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
+ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
     PORT=7860 \
     GRADIO_SERVER_NAME=0.0.0.0
 
 WORKDIR /home/user/app
 
-COPY requirements.txt /home/user/app/requirements.txt
+# Copy requirements first
+COPY requirements.txt .
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc build-essential && \
@@ -17,8 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-get purge -y gcc build-essential && \
     apt-get autoremove -y && apt-get clean -y
 
-COPY . /home/user/app
+# Copy full repo — but due to .dockerignore, ONLY demo.db from data/ is included
+COPY . .
 
+# Optional debug
+# RUN ls -R /home/user/app/data
 
 EXPOSE 7860
 
