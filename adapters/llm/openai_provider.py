@@ -48,7 +48,7 @@ class OpenAIProvider(LLMProvider):
         api_key, base_url, model = _resolve_api_config()
         os.environ["OPENAI_API_KEY"] = api_key
         os.environ["OPENAI_BASE_URL"] = base_url
-        self.client = OpenAI()
+        self.client = OpenAI(timeout=120.0)
         self.model = model
         # last call usage/metadata for tracing
         self._last_usage: dict[str, Any] = {}
