@@ -23,7 +23,6 @@ from adapters.llm.openai_provider import OpenAIProvider
 from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.db.postgres_adapter import PostgresAdapter
 from nl2sql.pipeline_factory import (
-    pipeline_from_config,
     pipeline_from_config_with_adapter,
 )
 from nl2sql.prom import REGISTRY
@@ -70,7 +69,8 @@ def get_runner() -> Runner:
 
     global _PIPELINE
     if _PIPELINE is None:
-        _PIPELINE = pipeline_from_config(CONFIG_PATH)
+        adapter = _select_adapter(None)  # fallback demo.db
+        _PIPELINE = pipeline_from_config_with_adapter(CONFIG_PATH, adapter)
     return _PIPELINE.run
 
 
@@ -140,7 +140,6 @@ UPLOAD_DIR = Path("data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 CONFIG_PATH = os.getenv("PIPELINE_CONFIG", "configs/sqlite_pipeline.yaml")
-_PIPELINE = pipeline_from_config(CONFIG_PATH)
 
 
 # -------------------------------
