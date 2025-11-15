@@ -8,6 +8,7 @@ ENV PIP_NO_CACHE_DIR=1 \
 
 WORKDIR /home/user/app
 
+# Step 1: Copy requirements to ensure pip install works
 COPY requirements.txt /home/user/app/requirements.txt
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -17,8 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-get purge -y gcc build-essential && \
     apt-get autoremove -y && apt-get clean -y
 
-COPY . /home/user/app
+# Step 2: Copy the rest of the repo including data folder
+COPY . /home/user/app/
 
+# Optional check:
+RUN ls -R /home/user/app/data
 
 EXPOSE 7860
 
