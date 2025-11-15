@@ -70,7 +70,7 @@ def get_runner() -> Runner:
     global _PIPELINE
     if _PIPELINE is None:
         adapter = _select_adapter(None)  # fallback demo.db
-        _PIPELINE = pipeline_from_config_with_adapter(CONFIG_PATH, adapter)
+        _PIPELINE = pipeline_from_config_with_adapter(CONFIG_PATH, adapter=adapter)
     return _PIPELINE.run
 
 
