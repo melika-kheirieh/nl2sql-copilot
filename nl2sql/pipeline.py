@@ -27,6 +27,7 @@ class FinalResult:
     verified: Optional[bool]
     questions: Optional[List[str]]
     traces: List[dict]
+    result: Optional[Dict[str, Any]] = None
 
 
 class Pipeline:
@@ -243,6 +244,7 @@ class Pipeline:
         t_all0 = time.perf_counter()
         traces: List[dict] = []
         details: List[str] = []
+        exec_result: Dict[str, Any] = {}
 
         def _fallback_trace(stage_name: str, dt_ms: float, ok: bool) -> None:
             traces.append(
@@ -417,6 +419,8 @@ class Pipeline:
                 _fallback_trace("executor", dt, r_exec.ok)
             if not r_exec.ok and r_exec.error:
                 details.extend(r_exec.error)  # soft: keep for repair/verifier context
+            if r_exec.ok and isinstance(r_exec.data, dict):
+                exec_result = dict(r_exec.data)
 
             # --- 6) verifier ---
             t0 = time.perf_counter()
@@ -488,6 +492,8 @@ class Pipeline:
                         if r_exec2.error:
                             details.extend(r_exec2.error)
                         continue
+                    if r_exec2.ok and isinstance(r_exec2.data, dict):
+                        exec_result = dict(r_exec2.data)
 
                     # verifier again
                     t0 = time.perf_counter()
@@ -575,6 +581,7 @@ class Pipeline:
                 verified=verified_final,
                 questions=None,
                 traces=self._normalize_traces(traces),
+                result=exec_result or None,
             )
 
         except Exception:
