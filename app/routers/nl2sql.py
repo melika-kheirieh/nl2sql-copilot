@@ -126,6 +126,15 @@ POSTGRES_DSN = os.getenv("POSTGRES_DSN")
 DEFAULT_SQLITE_PATH: str = os.getenv(
     "DEFAULT_SQLITE_PATH", "data/Chinook_Sqlite.sqlite"
 )
+print("=== STARTUP DEBUG ===")
+print("DEFAULT_SQLITE_PATH:", DEFAULT_SQLITE_PATH)
+print("CWD:", os.getcwd())
+print("FILES in ./:", os.listdir("."))
+print(
+    "FILES in ./data:",
+    os.listdir("data") if os.path.exists("data") else "NO DATA FOLDER",
+)
+
 
 # Runtime upload storage
 _DB_UPLOAD_DIR = os.getenv("DB_UPLOAD_DIR", "/tmp/nl2sql_dbs")
