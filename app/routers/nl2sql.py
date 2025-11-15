@@ -8,6 +8,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional, Union, cast, Callable, Tuple
 import hashlib
+import logging
 
 # --- Third-party ---
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query
@@ -27,7 +28,7 @@ from nl2sql.pipeline_factory import (
 )
 from nl2sql.prom import REGISTRY
 
-
+log = logging.getLogger(__name__)
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
@@ -166,9 +167,6 @@ def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapte
 
     if db_id:
         cleanup_stale_dbs()
-        import logging
-
-        log = logging.getLogger(__name__)
 
         candidates = [
             Path("/tmp/nl2sql_dbs") / f"{db_id}.sqlite",
@@ -181,27 +179,34 @@ def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapte
 
         for candidate in candidates:
             if candidate.exists():
-                log.info(f"✅ Using DB file: {candidate}")
+                log.info(f"Using DB file: {candidate}")
                 return SQLiteAdapter(str(candidate))
 
         raise HTTPException(status_code=404, detail=f"db_id not found: {db_id}")
 
+    # -------- Default SQLite Logic --------
     default_path = Path(DEFAULT_SQLITE_PATH)
+    db_path = str(default_path)
 
-    print("=== DEBUG DEFAULT SQLITE ===")
-    print("DEFAULT_SQLITE_PATH env:", DEFAULT_SQLITE_PATH)
-    print("CWD:", os.getcwd())
-    print("ABS PATH:", Path(DEFAULT_SQLITE_PATH).resolve())
-    print("EXISTS?:", Path(DEFAULT_SQLITE_PATH).exists())
-    print("LIST DIR:", os.listdir(os.getcwd()))
-    print(
-        "LIST DATA:",
-        os.listdir("data") if os.path.exists("data") else "NO DATA DIRECTORY",
-    )
+    log.debug("DEFAULT SQLITE DEBUG INFO:")
+    log.debug(f"DEFAULT_SQLITE_PATH env: {DEFAULT_SQLITE_PATH}")
+    log.debug(f"CWD: {os.getcwd()}")
+    log.debug(f"ABS PATH: {default_path.resolve()}")
+    log.debug(f"EXISTS?: {default_path.exists()}")
+    if os.path.exists("data"):
+        log.debug(f"LIST DATA: {os.listdir('data')}")
+    else:
+        log.debug("LIST DATA: NO DATA DIRECTORY")
 
     if not default_path.exists():
-        raise HTTPException(status_code=500, detail="default SQLite DB not found")
-    return SQLiteAdapter(str(default_path))
+        fallback = Path("data/demo.db")
+        if fallback.exists():
+            log.warning("Default sqlite missing; using fallback demo.db")
+            db_path = str(fallback)
+        else:
+            raise HTTPException(status_code=500, detail="no sqlite database found")
+
+    return SQLiteAdapter(db_path)
 
 
 # -------------------------------
