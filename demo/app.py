@@ -209,9 +209,12 @@ def build_ui() -> gr.Blocks:
         gr.Examples(
             examples=[
                 ["List all artists"],
-                ["Top 5 customers by total invoice amount"],
+                [
+                    "List customers whose total spending is above the average invoice total."
+                ],
                 ["Total number of tracks per genre"],
-                ["Top 3 albums by total sales"],
+                ["List all albums with their total sales"],
+                ["Customers spending above average"],
             ],
             inputs=[q],
             label="Try these example queries",
