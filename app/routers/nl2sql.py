@@ -178,6 +178,18 @@ def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapte
         raise HTTPException(status_code=404, detail=f"db_id not found: {db_id}")
 
     default_path = Path(DEFAULT_SQLITE_PATH)
+
+    print("=== DEBUG DEFAULT SQLITE ===")
+    print("DEFAULT_SQLITE_PATH env:", DEFAULT_SQLITE_PATH)
+    print("CWD:", os.getcwd())
+    print("ABS PATH:", Path(DEFAULT_SQLITE_PATH).resolve())
+    print("EXISTS?:", Path(DEFAULT_SQLITE_PATH).exists())
+    print("LIST DIR:", os.listdir(os.getcwd()))
+    print(
+        "LIST DATA:",
+        os.listdir("data") if os.path.exists("data") else "NO DATA DIRECTORY",
+    )
+
     if not default_path.exists():
         raise HTTPException(status_code=500, detail="default SQLite DB not found")
     return SQLiteAdapter(str(default_path))
