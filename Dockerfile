@@ -6,14 +6,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=7860 \
     GRADIO_SERVER_NAME=0.0.0.0
 
-WORKDIR /app
-COPY . /app
+WORKDIR /home/user/app
 
-RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir -r requirements.txt
+
+RUN pip install --no-cache-dir -U pip && \
+    pip install --no-cache-dir -r requirements.txt
+
 
 EXPOSE 7860
 
 # Ensure base image ENTRYPOINT (if any) doesn't override ours
 ENTRYPOINT []
-RUN echo "=== REBUILD $(date) ==="
 CMD ["python", "-u", "start.py"]
