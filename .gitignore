@@ -35,9 +35,11 @@ dist/
 .wheels/
 
 # --- Data & databases ---
-data/
+data/*
 *.sqlite
 *.db
+# allow demo database for the public demo
+!data/demo.db
 
 # --- Logs & temp files ---
 logs/
