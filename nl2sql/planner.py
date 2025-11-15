@@ -125,9 +125,7 @@ class Planner:
         else:
             # Call with increased timeout
             plan_text, pin, pout, cost = self.llm.plan(
-                user_query=user_query,
-                schema_preview=trimmed,
-                timeout=120,  # Increase timeout for large schemas
+                user_query=user_query, schema_preview=trimmed
             )
             self._plan_cache[key] = (plan_text, pin, pout, cost)
 
