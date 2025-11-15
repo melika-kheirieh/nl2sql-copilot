@@ -86,18 +86,6 @@ def _pick_relevant_tables(schema_text: str, question: str, k: int = 3) -> str:
         return schema_text
 
 
-# --------- Add schema size check ---------
-def _trim_if_large(schema_text: str, max_chars: int = 8000) -> str:
-    """Trim schema if it's too large to prevent timeout"""
-    if len(schema_text) <= max_chars:
-        return schema_text
-
-    # Keep first part of schema that fits
-    lines = schema_text[:max_chars].splitlines()
-    # Try to end at a complete line
-    return "\n".join(lines[:-1]) if len(lines) > 1 else lines[0]
-
-
 # ------------------------------ Planner ------------------------------
 class Planner:
     """Planner wrapper around the LLM provider."""
@@ -110,10 +98,7 @@ class Planner:
         self._plan_cache: dict[tuple[str, int, int], tuple[str, int, int, float]] = {}
 
     def run(self, *, user_query: str, schema_preview: str) -> Dict[str, Any]:
-        # First apply relevance filtering
         trimmed = _pick_relevant_tables(schema_preview or "", user_query or "", k=3)
-        # Then apply size limit to prevent timeout
-        trimmed = _trim_if_large(trimmed, max_chars=8000)
 
         key: tuple[str, int, int] = (
             self.model_id,
@@ -123,7 +108,6 @@ class Planner:
         if key in self._plan_cache:
             plan_text, pin, pout, cost = self._plan_cache[key]
         else:
-            # Call with increased timeout
             plan_text, pin, pout, cost = self.llm.plan(
                 user_query=user_query, schema_preview=trimmed
             )
