@@ -1,19 +1,26 @@
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ENV PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
     PORT=7860 \
     GRADIO_SERVER_NAME=0.0.0.0
 
-WORKDIR /app
-COPY . /app
+WORKDIR /home/user/app
 
-RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt /home/user/app/requirements.txt
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc build-essential && \
+    pip install --no-cache-dir -U pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    apt-get purge -y gcc build-essential && \
+    apt-get autoremove -y && apt-get clean -y
+
+COPY . /home/user/app
+
 
 EXPOSE 7860
 
-# Ensure base image ENTRYPOINT (if any) doesn't override ours
 ENTRYPOINT []
-RUN echo "=== REBUILD $(date) ==="
 CMD ["python", "-u", "start.py"]

@@ -23,7 +23,6 @@ from adapters.llm.openai_provider import OpenAIProvider
 from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.db.postgres_adapter import PostgresAdapter
 from nl2sql.pipeline_factory import (
-    pipeline_from_config,
     pipeline_from_config_with_adapter,
 )
 from nl2sql.prom import REGISTRY
@@ -70,7 +69,8 @@ def get_runner() -> Runner:
 
     global _PIPELINE
     if _PIPELINE is None:
-        _PIPELINE = pipeline_from_config(CONFIG_PATH)
+        adapter = _select_adapter(None)  # fallback demo.db
+        _PIPELINE = pipeline_from_config_with_adapter(CONFIG_PATH, adapter=adapter)
     return _PIPELINE.run
 
 
@@ -126,6 +126,15 @@ POSTGRES_DSN = os.getenv("POSTGRES_DSN")
 DEFAULT_SQLITE_PATH: str = os.getenv(
     "DEFAULT_SQLITE_PATH", "data/Chinook_Sqlite.sqlite"
 )
+print("=== STARTUP DEBUG ===")
+print("DEFAULT_SQLITE_PATH:", DEFAULT_SQLITE_PATH)
+print("CWD:", os.getcwd())
+print("FILES in ./:", os.listdir("."))
+print(
+    "FILES in ./data:",
+    os.listdir("data") if os.path.exists("data") else "NO DATA FOLDER",
+)
+
 
 # Runtime upload storage
 _DB_UPLOAD_DIR = os.getenv("DB_UPLOAD_DIR", "/tmp/nl2sql_dbs")
@@ -140,7 +149,6 @@ UPLOAD_DIR = Path("data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 CONFIG_PATH = os.getenv("PIPELINE_CONFIG", "configs/sqlite_pipeline.yaml")
-_PIPELINE = pipeline_from_config(CONFIG_PATH)
 
 
 # -------------------------------
@@ -179,6 +187,18 @@ def _select_adapter(db_id: Optional[str]) -> Union[PostgresAdapter, SQLiteAdapte
         raise HTTPException(status_code=404, detail=f"db_id not found: {db_id}")
 
     default_path = Path(DEFAULT_SQLITE_PATH)
+
+    print("=== DEBUG DEFAULT SQLITE ===")
+    print("DEFAULT_SQLITE_PATH env:", DEFAULT_SQLITE_PATH)
+    print("CWD:", os.getcwd())
+    print("ABS PATH:", Path(DEFAULT_SQLITE_PATH).resolve())
+    print("EXISTS?:", Path(DEFAULT_SQLITE_PATH).exists())
+    print("LIST DIR:", os.listdir(os.getcwd()))
+    print(
+        "LIST DATA:",
+        os.listdir("data") if os.path.exists("data") else "NO DATA DIRECTORY",
+    )
+
     if not default_path.exists():
         raise HTTPException(status_code=500, detail="default SQLite DB not found")
     return SQLiteAdapter(str(default_path))
