@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional, Any, Dict, Mapping, Sequence
+from pydantic import BaseModel
+from typing import List, Optional, Any, Dict
 
 
 class NL2SQLRequest(BaseModel):
@@ -21,10 +21,11 @@ class TraceModel(BaseModel):
 
 
 class NL2SQLResponse(BaseModel):
-    ambiguous: bool = False
+    ambiguous: bool
     sql: Optional[str] = None
     rationale: Optional[str] = None
-    traces: Sequence[TraceModel | Mapping[str, Any]] = Field(default_factory=list)
+    traces: List[Dict[str, Any]] = []
+    result: Dict[str, Any] = {}
 
 
 class ClarifyResponse(BaseModel):

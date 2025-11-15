@@ -122,7 +122,10 @@ router = APIRouter(prefix="/nl2sql")
 # -------------------------------
 DB_MODE = os.getenv("DB_MODE", "sqlite").lower()  # "sqlite" or "postgres"
 POSTGRES_DSN = os.getenv("POSTGRES_DSN")
-DEFAULT_SQLITE_PATH: str = os.getenv("DEFAULT_SQLITE_DB", "data/Chinook_Sqlite.sqlite")
+# Default demo DB used when no db_id is provided (can be full Chinook or a tiny demo DB)
+DEFAULT_SQLITE_PATH: str = os.getenv(
+    "DEFAULT_SQLITE_PATH", "data/Chinook_Sqlite.sqlite"
+)
 
 # Runtime upload storage
 _DB_UPLOAD_DIR = os.getenv("DB_UPLOAD_DIR", "/tmp/nl2sql_dbs")
@@ -308,10 +311,9 @@ async def upload_db(file: UploadFile = File(...)):
 def _final_schema_preview(db_id: Optional[str], provided_preview: Optional[str]) -> str:
     if provided_preview and provided_preview.strip():
         return provided_preview
-    if db_id:
-        adapter = _select_adapter(db_id)
-        return _derive_schema_preview(adapter) or ""
-    return ""
+
+    adapter = _select_adapter(db_id)  # works for both None and explicit db_id
+    return _derive_schema_preview(adapter) or ""
 
 
 @router.get("/health")
@@ -384,12 +386,24 @@ def nl2sql_handler(
 
     # Success path → 200 (coerce/standardize traces for API)
     traces = [_round_trace(t) for t in (result.traces or [])]
+
+    # Normalize execution result (if executor attached one)
+    response_result: Dict[str, Any] = {}
+    raw_result = getattr(result, "result", None)
+    if raw_result is not None:
+        if isinstance(raw_result, dict):
+            response_result = raw_result
+        else:
+            response_result = cast(Dict[str, Any], _to_dict(raw_result))
+
     payload = NL2SQLResponse(
         ambiguous=False,
         sql=result.sql,
         rationale=result.rationale,
         traces=traces,
+        result=response_result,
     )
+
     # store in cache
     _CACHE[ck] = (time.time(), cast(Dict[str, Any], payload.model_dump()))
     return payload

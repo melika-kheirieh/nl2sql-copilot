@@ -1,156 +1,211 @@
-import requests
-import gradio as gr
 import os
-import json
-from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-# Prefer internal backend when running inside Docker
+import gradio as gr
+import requests
+from requests.exceptions import ConnectionError, RequestException, Timeout
+
+# Backend configuration
 API_HOST = os.getenv("API_HOST", "localhost")
 API_PORT = os.getenv("API_PORT", "8000")
+API_BASE = f"http://{API_HOST}:{API_PORT}"
 
-USE_MOCK = os.environ.get("USE_MOCK", "0") == "1"
-API_UPLOAD = f"http://{API_HOST}:{API_PORT}/api/v1/nl2sql/upload_db"
-API_QUERY = f"http://{API_HOST}:{API_PORT}/api/v1/nl2sql"
-
-HARDCODED_MOCK = {
-    "sql": "SELECT name, country FROM singer WHERE age > 20;",
-    "rationale": "Example: select singers older than 20.",
-    "result": {
-        "rows": 5,
-        "columns": ["name", "country"],
-        "rows_data": [["Alice", "France"], ["Bob", "USA"]],
-    },
-    "traces": [
-        {"stage": "detector", "summary": "ok", "duration_ms": 5},
-        {"stage": "planner", "summary": "intent parsed", "duration_ms": 120},
-        {"stage": "generator", "summary": "sql generated", "duration_ms": 420},
-        {"stage": "verifier", "summary": "passed", "duration_ms": 10},
-    ],
-    "metrics": {"EM": 0.15, "SM": 0.70, "ExecAcc": 0.73, "avg_latency_ms": 8113},
-}
+API_QUERY = f"{API_BASE}/api/v1/nl2sql"
+API_UPLOAD = f"{API_BASE}/api/v1/nl2sql/upload_db"
+API_KEY = os.getenv("API_KEY", "dev-key")  # align with backend API_KEYS env
 
 
-def load_mock_from_summary():
-    """Try to read latest benchmark summary.json; fallback to hardcoded mock."""
+def call_pipeline_api(
+    query: str,
+    db_id: Optional[str] = None,
+    timeout: int = 30,
+) -> Dict[str, Any]:
+    """
+    Call the real FastAPI backend. No mock, no silent fallback.
+
+    If db_id is None, the backend will use its default database.
+    Any connection or HTTP error is surfaced back to the UI as an error payload.
+    """
+    payload: Dict[str, Any] = {"query": query}
+    if db_id:
+        payload["db_id"] = db_id
+
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["X-API-Key"] = API_KEY
+
     try:
-        files = sorted(
-            Path("benchmarks/results_pro").glob("*/summary.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if files:
-            p = files[0]
-            with open(p, "r", encoding="utf-8") as f:
-                sj = json.load(f)
-            return {
-                "sql": sj.get("example_sql", HARDCODED_MOCK["sql"]),
-                "rationale": sj.get("note", HARDCODED_MOCK["rationale"]),
-                "result": {"rows": sj.get("total_samples", 0), "columns": []},
-                "traces": HARDCODED_MOCK["traces"],
-                "metrics": {
-                    "EM": sj.get("avg_em", HARDCODED_MOCK["metrics"]["EM"]),
-                    "SM": sj.get("avg_sm", HARDCODED_MOCK["metrics"]["SM"]),
-                    "ExecAcc": sj.get(
-                        "avg_execacc", HARDCODED_MOCK["metrics"]["ExecAcc"]
-                    ),
-                    "avg_latency_ms": sj.get(
-                        "avg_latency_ms", HARDCODED_MOCK["metrics"]["avg_latency_ms"]
-                    ),
-                },
-            }
-    except Exception:
-        pass
-    return HARDCODED_MOCK
+        resp = requests.post(API_QUERY, json=payload, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
+    except (ConnectionError, Timeout) as e:
+        msg = f"Backend not reachable: {e}"
+        print(f"[demo] {msg}", flush=True)
+        return {
+            "sql": "",
+            "rationale": msg,
+            "result": {},
+            "traces": [],
+            "error": msg,
+        }
+    except RequestException:
+        try:
+            body: Any = resp.json()
+        except Exception:
+            body = resp.text
+        msg = f"Backend error {resp.status_code}: {body}"
+        print(f"[demo] {msg}", flush=True)
+        return {
+            "sql": "",
+            "rationale": msg,
+            "result": {},
+            "traces": [],
+            "error": msg,
+        }
 
 
-def call_pipeline_api_or_mock(query: str, db_id: str | None = None, timeout=10):
-    """Call backend if available; otherwise return mock."""
-    if USE_MOCK:
-        return load_mock_from_summary()
-    try:
-        payload = {"query": query}
-        if db_id:
-            payload["db_id"] = db_id
-        r = requests.post(API_QUERY, json=payload, timeout=timeout)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        print(f"[demo] API call failed ({e}); using mock instead.")
-        return load_mock_from_summary()
+def upload_db(file_obj: Any) -> Tuple[Optional[str], str]:
+    """
+    Upload a SQLite database to the backend and return (db_id, message).
 
-
-def upload_db(file_obj):
+    The returned db_id is stored in Gradio state and used for subsequent queries.
+    """
     if file_obj is None:
-        return None, "No DB uploaded. Default DB will be used."
+        return None, "No DB uploaded. The backend default DB will be used."
+
     name = getattr(file_obj, "name", "db.sqlite")
     if not (name.endswith(".db") or name.endswith(".sqlite")):
         return None, "Only .db or .sqlite files are allowed."
+
     size = getattr(file_obj, "size", None)
     if size and size > 20 * 1024 * 1024:
         return None, "File too large (>20MB) for this demo."
 
-    files = {"file": (name, open(file_obj.name, "rb"), "application/octet-stream")}
+    # Gradio's File component provides a temporary file on disk.
     try:
-        r = requests.post(API_UPLOAD, files=files, timeout=120)
+        f = open(file_obj.name, "rb")
+    except Exception as e:
+        return None, f"Could not open uploaded file: {e}"
+
+    files = {"file": (os.path.basename(name), f, "application/octet-stream")}
+
+    headers: Dict[str, str] = {}
+    if API_KEY:
+        headers["X-API-Key"] = API_KEY
+
+    try:
+        resp = requests.post(API_UPLOAD, files=files, headers=headers, timeout=120)
     finally:
         try:
-            files["file"][1].close()
+            f.close()
         except Exception:
             pass
 
-    if r.ok:
-        data = r.json()
-        return data.get("db_id"), f"Uploaded OK. db_id={data.get('db_id')}"
-    try:
-        body = r.json()
-    except ValueError:
-        body = r.text
-    return None, f"Upload failed ({r.status_code}): {body}"
+    if resp.ok:
+        try:
+            data = resp.json()
+        except Exception:
+            return None, f"Upload succeeded but response was not JSON: {resp.text}"
+        db_id = data.get("db_id")
+        return db_id, f"Uploaded OK. db_id={db_id}"
+    else:
+        try:
+            body = resp.json()
+        except Exception:
+            body = resp.text
+        return None, f"Upload failed ({resp.status_code}): {body}"
 
 
-def query_to_sql(user_query: str, db_id: str | None, _debug_flag: bool):
+def query_to_sql(
+    user_query: str,
+    db_id: Optional[str],
+    _debug_flag: bool,
+) -> Tuple[str, str, str, Any, List[Dict[str, Any]], List[List[Any]]]:
+    """
+    Run the full NL2SQL pipeline via the backend and format outputs for the UI.
+
+    Returns:
+        badges_text, sql, explanation, result_json, traces_json, timings_table
+    """
     if not user_query.strip():
-        return "❌ Please enter a query.", "", "", {}, [], []
+        msg = "❌ Please enter a query."
+        return msg, "", msg, {}, [], []
 
-    data = call_pipeline_api_or_mock(user_query, db_id)
-    sql = data.get("sql") or ""
-    explanation = data.get("rationale") or ""
+    data = call_pipeline_api(user_query, db_id)
+
+    # Explicit error propagation from backend
+    if data.get("error") and not data.get("sql"):
+        err_msg = str(data.get("error"))
+        return f"❌ {err_msg}", "", err_msg, {}, [], []
+
+    sql = str(data.get("sql") or "")
+    explanation = str(data.get("rationale") or "")
     result = data.get("result", {})
-    trace_list = data.get("traces", [])
+    traces = data.get("traces", []) or []
 
-    metrics = data.get("metrics", {})
-    badges_text = (
-        f"EM={metrics.get('EM', '?')} | SM={metrics.get('SM', '?')} | "
-        f"ExecAcc={metrics.get('ExecAcc', '?')} | latency={metrics.get('avg_latency_ms', '?')}ms"
-    )
+    # Compute simple latency badge from traces (sum of duration_ms)
+    badges_text = ""
+    if traces and all("duration_ms" in t for t in traces):
+        total_ms = sum(float(t.get("duration_ms", 0.0)) for t in traces)
+        badges_text = f"latency≈{int(total_ms)}ms"
 
-    timings_table = []
-    if trace_list and all("duration_ms" in t for t in trace_list):
-        timings_table = [[t["stage"], t["duration_ms"]] for t in trace_list]
+    # Build timings table for the Timings tab
+    timings_table: List[List[Any]] = []
+    if traces and all("duration_ms" in t for t in traces):
+        timings_table = [
+            [t.get("stage", "?"), t.get("duration_ms", 0.0)] for t in traces
+        ]
 
-    # Note: repair candidates / diff are not exposed in the UI yet.
-    return badges_text, sql, explanation, result, trace_list, timings_table
+    return badges_text, sql, explanation, result, traces, timings_table
 
 
 def build_ui() -> gr.Blocks:
+    """
+    Build the Gradio UI for the NL2SQL Copilot demo.
+
+    - Optional DB upload (SQLite)
+    - Textbox for the natural language question
+    - Example queries aligned with the default Chinook DB
+    - Tabs for result, trace, repair notes, and per-stage timings
+    """
     with gr.Blocks(title="NL2SQL Copilot") as demo:
-        gr.Markdown("# NL2SQL Copilot\nUpload a SQLite DB (optional) or use default.")
+        gr.Markdown(
+            "# NL2SQL Copilot\n"
+            "Upload a SQLite DB (optional) or use the backend default database."
+        )
+
         db_state = gr.State(value=None)
 
+        # DB upload section
         with gr.Row():
             db_file = gr.File(
-                label="Upload SQLite (.db/.sqlite)", file_types=[".db", ".sqlite"]
+                label="Upload SQLite (.db/.sqlite)",
+                file_types=[".db", ".sqlite"],
             )
             upload_btn = gr.Button("Upload DB")
-        db_msg = gr.Markdown()
-        upload_btn.click(upload_db, inputs=[db_file], outputs=[db_state, db_msg])
 
+        db_msg = gr.Markdown()
+        upload_btn.click(
+            upload_db,
+            inputs=[db_file],
+            outputs=[db_state, db_msg],
+        )
+
+        # Query input and run button
         with gr.Row():
-            q = gr.Textbox(label="Question", scale=4)
-            debug = gr.Checkbox(label="Debug (UI only)", value=True, scale=1)
+            q = gr.Textbox(
+                label="Question",
+                placeholder="e.g. Top 3 albums by total sales",
+                scale=4,
+            )
+            debug = gr.Checkbox(
+                label="Debug (UI only)",
+                value=True,
+                scale=1,
+            )
             run = gr.Button("Run")
 
-        # Example queries to make the demo easier to explore
+        # Example queries compatible with the Chinook schema
         gr.Examples(
             examples=[
                 ["List all artists"],
@@ -164,13 +219,13 @@ def build_ui() -> gr.Blocks:
 
         badges = gr.Markdown()
         sql_out = gr.Code(label="Final SQL", language="sql")
-        exp_out = gr.Textbox(label="Explanation", lines=3)
+        exp_out = gr.Textbox(label="Explanation", lines=4)
 
         with gr.Tab("Result"):
             res_out = gr.JSON()
 
         with gr.Tab("Trace"):
-            trace = gr.JSON(label="Stage trace")
+            trace_out = gr.JSON(label="Stage trace")
 
         with gr.Tab("Repair"):
             gr.Markdown(
@@ -184,8 +239,8 @@ def build_ui() -> gr.Blocks:
                 * All repair attempts and outcomes are tracked in Prometheus
                   (for example, `nl2sql_repair_attempts_total` and related rates).
 
-                For now, detailed before/after SQL diff and repair candidates
-                are exposed via trace logs and metrics dashboards.
+                For now, detailed before/after SQL diffs and repair candidates
+                are exposed via traces and metrics dashboards.
 
                 This tab is reserved for a future, richer UI:
                 side-by-side SQL diff, repair candidates, and explanations.
@@ -194,25 +249,19 @@ def build_ui() -> gr.Blocks:
 
         with gr.Tab("Timings"):
             timings = gr.Dataframe(
-                headers=["stage", "duration_ms"], datatype=["str", "number"]
+                headers=["stage", "duration_ms"],
+                datatype=["str", "number"],
             )
 
         run.click(
             query_to_sql,
             inputs=[q, db_state, debug],
-            outputs=[
-                badges,
-                sql_out,
-                exp_out,
-                res_out,
-                trace,
-                timings,
-            ],
+            outputs=[badges, sql_out, exp_out, res_out, trace_out, timings],
         )
+
     return demo
 
 
-# expose for SDK mode (no Docker)
 demo = build_ui()
 
 if __name__ == "__main__":
