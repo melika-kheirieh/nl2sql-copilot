@@ -6,16 +6,19 @@ ENV PIP_NO_CACHE_DIR=1 \
     PORT=7860 \
     GRADIO_SERVER_NAME=0.0.0.0
 
-# HuggingFace mounts your repository at /home/user/app in RUN time
 WORKDIR /home/user/app
 
-# Install Python dependencies — requirements.txt is mounted at run time → accessible here
+COPY requirements.txt /home/user/app/requirements.txt
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc build-essential && \
     pip install --no-cache-dir -U pip && \
     pip install --no-cache-dir -r requirements.txt && \
     apt-get purge -y gcc build-essential && \
     apt-get autoremove -y && apt-get clean -y
+
+COPY . /home/user/app
+
 
 EXPOSE 7860
 
