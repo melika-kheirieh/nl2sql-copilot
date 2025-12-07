@@ -1,30 +1,53 @@
-FROM python:3.12-slim
+# -------------------------------------
+# Base image (runtime)
+# -------------------------------------
+FROM python:3.12-slim AS base
 
+# Prevent Python from writing .pyc files and force stdout flush
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PORT=7860 \
-    GRADIO_SERVER_NAME=0.0.0.0
+    PORT=7860
 
-WORKDIR /home/user/app
+# Install tini (proper init process) + curl (for healthcheck)
+RUN apt-get update && apt-get install -y --no-install-recommends tini curl \
+   && rm -rf /car/lib/apt/lists/*
 
-# Copy requirements first
+WORKDIR /app
+
+
+# -------------------------------------
+# Builder stage (dependencies)
+# -------------------------------------
+FROM base AS builder
+
+WORKDIR /app
+
 COPY requirements.txt .
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc build-essential && \
-    pip install --no-cache-dir -U pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    apt-get purge -y gcc build-essential && \
-    apt-get autoremove -y && apt-get clean -y
+        build-essential gcc \
+    && pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy full repo — but due to .dockerignore, ONLY demo.db from data/ is included
+
+# -------------------------------------
+# Builder stage (dependencies)
+# -------------------------------------
+FROM base as final
+
+WORKDIR /app
+
+# Copy installed dependencies from builder
+COPY --from=builder /usr/local /usr/local
+
 COPY . .
 
-# Optional debug
-# RUN ls -R /home/user/app/data
-
+# Expose ports (FastAPI + Gradio)
 EXPOSE 7860
+EXPOSE 8000
 
-ENTRYPOINT []
+# tini handles PID1, zombie reaping, and signals
+ENTRYPOINT ["tini", "--"]
+
 CMD ["python", "-u", "start.py"]
