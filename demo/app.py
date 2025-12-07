@@ -212,7 +212,7 @@ def build_ui() -> gr.Blocks:
                 [
                     "List customers whose total spending is above the average invoice total."
                 ],
-                ["Total number of tracks per genre"],
+                ["List the first 10 albums."],
                 ["List all albums with their total sales"],
                 ["Customers spending above average"],
             ],

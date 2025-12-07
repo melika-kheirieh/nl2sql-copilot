@@ -1,4 +1,3 @@
-# tests/test_health_and_metrics.py
 from fastapi.testclient import TestClient
 from app.main import app
 

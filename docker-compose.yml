@@ -1,31 +1,93 @@
+version: "3.9"
+
 services:
-  api:
+  nl2sql:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nl2sql:dev
+    container_name: nl2sql
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
     environment:
-      POSTGRES_DSN: dbname=demo user=postgres password=postgres host=postgres port=5432
+#      POSTGRES_DSN: dbname=demo user=postgres password=postgres host=postgres port=5432
       OPENAI_MODEL: gpt-4o-mini
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
     ports:
-      - "8000:8000"
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+      - "8000:8000"  # FastAPI
+      - "7860:7860"  # Gradio
+
+
+    # Simple healthcheck using curl and FastAPI docs endpoint
+    healthcheck:
+      test: ["CMD-Shell", "curl -f http://localhost:8000/docs || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+    networks:
+      - backend
+
 
   prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
+    image: prom/prometheus:2.55.0
+    container_name: nl2sql-prom
     restart: unless-stopped
-    ports:
-      - "9090:9090"
+
     volumes:
-      # 📘 Prometheus config
+      # 📘 Main Prometheus config
       - ./provisioning/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       # 📘 Rules (recording + alert rules)
       - ./provisioning/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
       # 📘 Persistent TSDB storage
       - prometheus_data:/prometheus
+
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--web.enable-lifecycle"
       - "--web.enable-admin-api"
 
+    ports:
+      - "9090:9090" # Prometheus UI
+
+    networks:
+      - backend
+
+  grafana:
+    image: grafana/grafana:12.2.1
+    container_name: nl2sql-grafana
+    restart: unless-stopped
+
+    environment:
+      - GF_SERVER_DOMAIN=localhost
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/provisioning/dashboards/nl2sql.json
+
+    volumes:
+      - # Persist Grafana internal DB (users, dashboards, settings)
+      - grafana_data:/var/lib/grafana
+      # Provisioning folders (read-only)
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+
+    ports:
+      - "3000:3000"  # Grafana UI
+
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge
+
 volumes:
   prometheus_data:
+  grafana_data:
