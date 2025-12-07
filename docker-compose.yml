@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   nl2sql:
     build:
@@ -23,7 +21,7 @@ services:
 
     # Simple healthcheck using curl and FastAPI docs endpoint
     healthcheck:
-      test: ["CMD-Shell", "curl -f http://localhost:8000/docs || exit 1"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -34,7 +32,7 @@ services:
 
 
   prometheus:
-    image: prom/prometheus:2.55.0
+    image: prom/prometheus:v2.55.0
     container_name: nl2sql-prom
     restart: unless-stopped
 
@@ -62,7 +60,6 @@ services:
     image: grafana/grafana:12.2.1
     container_name: nl2sql-grafana
     restart: unless-stopped
-
     environment:
       - GF_SERVER_DOMAIN=localhost
       - GF_SERVER_ROOT_URL=http://localhost:3000
@@ -72,17 +69,16 @@ services:
       - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/provisioning/dashboards/nl2sql.json
 
     volumes:
-      - # Persist Grafana internal DB (users, dashboards, settings)
       - grafana_data:/var/lib/grafana
       # Provisioning folders (read-only)
       - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
       - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
 
     ports:
-      - "3000:3000"  # Grafana UI
-
+      - "3000:3000"
     networks:
       - backend
+
 
 networks:
   backend:

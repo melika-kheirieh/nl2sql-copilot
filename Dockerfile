@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # -------------------------------------
 # Builder stage (dependencies)
 # -------------------------------------
-FROM base as final
+FROM base AS final
 
 WORKDIR /app
 
