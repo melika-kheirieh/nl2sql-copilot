@@ -22,18 +22,22 @@ from nl2sql.pipeline import FinalResult
 from nl2sql.prom import REGISTRY
 from app.dependencies import get_nl2sql_service
 from app.services.nl2sql_service import NL2SQLService
+from app.settings import get_settings
 
 log = logging.getLogger(__name__)
+settings = get_settings()
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 def require_api_key(key: Optional[str] = Security(api_key_header)):
     """
-    Simple API key check using X-API-Key header and API_KEYS env var.
-    If API_KEYS is empty → auth disabled (dev mode).
+    Simple API key check using X-API-Key header and configured API keys.
+
+    - Settings.api_keys_raw is a comma-separated list of keys.
+    - If api_keys_raw is empty → auth disabled (dev mode).
     """
-    raw = os.getenv("API_KEYS", "")
+    raw = settings.api_keys_raw or ""
     allowed = {k.strip() for k in raw.split(",") if k.strip()}
     if not allowed:
         # No keys configured → treat as dev mode (auth off).
@@ -50,8 +54,9 @@ cache_misses_total = Counter(
     "cache_misses_total", "NL2SQL cache misses", registry=REGISTRY
 )
 
-_CACHE_TTL = int(os.getenv("NL2SQL_CACHE_TTL_SEC", "300"))  # default 5 minutes
-_CACHE_MAX = int(os.getenv("NL2SQL_CACHE_MAX", "256"))
+# Cache TTL and max size from centralized settings
+_CACHE_TTL = settings.cache_ttl_sec
+_CACHE_MAX = settings.cache_max_entries
 _CACHE: Dict[Tuple[str, str, str], Tuple[float, Dict[str, Any]]] = {}
 
 
@@ -96,13 +101,13 @@ router = APIRouter(prefix="/nl2sql")
 # -------------------------------
 # Config / Defaults
 # -------------------------------
-DB_MODE = os.getenv("DB_MODE", "sqlite").lower()  # "sqlite" or "postgres"
+DB_MODE = settings.db_mode.lower()  # "sqlite" or "postgres"
 
-# Runtime upload storage
-_DB_UPLOAD_DIR = os.getenv("DB_UPLOAD_DIR", "/tmp/nl2sql_dbs")
-_DB_TTL_SECONDS: int = int(os.getenv("DB_TTL_SECONDS", "7200"))  # default 2 hours
+# Runtime upload storage for SQLite DBs
+_DB_UPLOAD_DIR = settings.db_upload_dir
 os.makedirs(_DB_UPLOAD_DIR, exist_ok=True)
 
+# Optional: separate directory for other uploads (kept as-is for now)
 UPLOAD_DIR = Path("data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -152,7 +157,7 @@ def schema_endpoint(
 
 def _to_dict(obj: Any) -> Any:
     """
-    Convert dataclass-like objects to plain dicts for JSON serialization.
+    Convert dataclass-like objects (and similar) to plain dicts for JSON.
     """
     if is_dataclass(obj) and not isinstance(obj, type):
         return asdict(obj)  # type: ignore[arg-type]
@@ -219,7 +224,7 @@ async def upload_db(file: UploadFile = File(...)):
 
     Only available when DB_MODE is 'sqlite':
     - Allowed extensions: .db, .sqlite
-    - File size capped by UPLOAD_MAX_BYTES (default 20 MB)
+    - File size capped by configured upload_max_bytes (default 20 MB)
     """
     if DB_MODE != "sqlite":
         raise HTTPException(
@@ -233,7 +238,7 @@ async def upload_db(file: UploadFile = File(...)):
         )
 
     data = await file.read()
-    max_bytes = int(os.getenv("UPLOAD_MAX_BYTES", str(20 * 1024 * 1024)))  # 20 MB
+    max_bytes = settings.upload_max_bytes
     if len(data) > max_bytes:
         raise HTTPException(
             status_code=400, detail=f"File too large (> {max_bytes} bytes)"
@@ -256,7 +261,7 @@ async def upload_db(file: UploadFile = File(...)):
 @router.get("/health")
 def health():
     """Simple router-level health endpoint."""
-    return {"status": "ok", "version": os.getenv("APP_VERSION", "dev")}
+    return {"status": "ok", "version": settings.app_version}
 
 
 # -------------------------------

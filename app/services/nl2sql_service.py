@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-import os
 import sqlite3
 from dataclasses import dataclass
 from typing import Any, Optional
+from pathlib import Path
 
 from nl2sql.pipeline import FinalResult
 from nl2sql.pipeline_factory import pipeline_from_config_with_adapter
 from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.db.postgres_adapter import PostgresAdapter
 from app import state
+from app.settings import Settings
 
 Adapter = Any  # You can replace this with a Protocol later
 
@@ -25,20 +26,18 @@ class NL2SQLService:
         - Build and run the pipeline for a given query.
     """
 
-    config_path: str
-    db_mode: str = "sqlite"
-    default_sqlite_path: str = "data/demo.db"
+    settings: Settings
 
     def _select_adapter(self, db_id: Optional[str]) -> Adapter:
-        """Select the DB adapter based on db_mode and optional db_id."""
+        """Select the DB adapter based on configured db_mode and optional db_id."""
 
-        mode = self.db_mode.lower()
+        mode = self.settings.db_mode.lower()
 
         if mode == "postgres":
-            dsn = os.getenv("POSTGRES_DSN", "").strip()
+            dsn = (self.settings.postgres_dsn or "").strip()
             if not dsn:
                 raise RuntimeError("Postgres DSN is not configured")
-            # Single shared Postgres DB; db_id is ignored is this mode.
+            # Single shared Postgres DB; db_id is ignored in this mode.
             return PostgresAdapter(dsn=dsn)
 
         # Default: sqlite mode
@@ -48,39 +47,44 @@ class NL2SQLService:
             path = state.get_db_path(db_id)
             if not path:
                 raise FileNotFoundError(f"Could not resolve DB for db_id={db_id!r}")
-            return SQLiteAdapter(path)
+            return SQLiteAdapter(path=path)
 
         # Fallback to default sqlite path(s)
-        # 1) env override
-        default_path = self.default_sqlite_path
+        default_path = self.settings.default_sqlite_path
 
-        if not default_path or not os.path.exists(default_path):
-            # 2) implicit demo path
-            demo_path = os.path.join("data", "demo.db")
-            if not os.path.exists(demo_path):
+        if not default_path:
+            # If default path is empty, try implicit demo path
+            demo_path = "data/demo.db"
+            if not Path(demo_path).exists():
                 raise FileNotFoundError(
                     f"No SQLite database found. "
                     f"Tried default_sqlite_path={default_path!r} and demo.db"
                 )
             default_path = demo_path
 
+        if not Path(default_path).exists():
+            # Last-chance check before constructing the adapter
+            raise FileNotFoundError(
+                f"SQLite database path does not exist: {default_path}"
+            )
+
         return SQLiteAdapter(path=default_path)
 
     def _introspect_sqlite_schema(self, adapter: Adapter) -> str:
         """
-        Build lightweight textual schema preview for a SQLite database.
+        Build a lightweight textual schema preview for a SQLite database.
 
-        This is a straight part of the overview sqlite3 logic, but contained
+        This is a straight port of the previous sqlite3 logic, but contained
         inside the service instead of the router.
         """
-        # Tru to locate the underlying .db path from the adaptor
+        # Try to locate the underlying .db path from the adapter
         db_path = getattr(adapter, "db_path", None) or getattr(adapter, "path", None)
         if not db_path:
             raise RuntimeError(
                 "SQLite adapter must expose a .db_path or .path attribute"
             )
 
-        if not os.path.exists(db_path):
+        if not Path(db_path).exists():
             raise FileNotFoundError(f"SQLite database path does not exist: {db_path}")
 
         lines: list[str] = []
@@ -119,7 +123,7 @@ class NL2SQLService:
         if override:
             return override
 
-        mode = self.db_mode.lower()
+        mode = self.settings.db_mode.lower()
         if mode == "postgres":
             # For postgres we expect the caller to provide schema_preview; we don't
             # do live introspection here.
@@ -138,5 +142,7 @@ class NL2SQLService:
     ) -> FinalResult:
         """Build a pipeline for the given DB and run the query through it."""
         adapter = self._select_adapter(db_id)
-        pipeline = pipeline_from_config_with_adapter(self.config_path, adapter=adapter)
+        pipeline = pipeline_from_config_with_adapter(
+            self.settings.pipeline_config_path, adapter=adapter
+        )
         return pipeline.run(user_query=query, schema_preview=schema_preview)

@@ -1,26 +1,31 @@
 import os
 import time
+
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+
 from nl2sql.prom import REGISTRY
-from app.routers import dev
+from app.routers import dev, nl2sql
+from app.settings import get_settings
 
 try:
     from dotenv import load_dotenv
 
     load_dotenv()
 except Exception:
+    # Best-effort .env loading; app must not crash if dotenv is missing.
     pass
 
-from app.routers import nl2sql
+
+settings = get_settings()
 
 # ----------------------------------------------------------------------------
 #  App definition
 # ----------------------------------------------------------------------------
 application = FastAPI(
     title="NL2SQL Copilot Prototype",
-    version=os.getenv("APP_VERSION", "0.1.0"),
+    version=settings.app_version,
     description="Convert natural language to safe & verified SQL",
 )
 
@@ -30,6 +35,7 @@ application.include_router(nl2sql.router, prefix="/api/v1")
 # Register Dev-only routes (only when APP_ENV=dev)
 if os.getenv("APP_ENV", "dev").lower() == "dev":
     application.include_router(dev.router, prefix="/api/v1")
+
 # ----------------------------------------------------------------------------
 #  Prometheus Metrics Middleware
 # ----------------------------------------------------------------------------
@@ -75,21 +81,30 @@ def healthz() -> str:
 
 @application.get("/readyz", response_class=PlainTextResponse, tags=["system"])
 def readyz() -> str:
-    mode = os.getenv("DB_MODE", "sqlite").lower()
+    """
+    Lightweight readiness probe:
+
+    - For postgres mode → ping PostgresAdapter using configured DSN.
+    - For sqlite mode   → ping SQLiteAdapter using configured default path.
+    """
+    mode = settings.db_mode.lower()
     try:
         if mode == "postgres":
             from adapters.db.postgres_adapter import PostgresAdapter
 
-            pg = PostgresAdapter(os.environ["POSTGRES_DSN"])
+            dsn = (settings.postgres_dsn or "").strip()
+            if not dsn:
+                raise RuntimeError("POSTGRES_DSN is not configured for readiness check")
+
+            pg = PostgresAdapter(dsn)
             ping_fn = getattr(pg, "ping", None)
             if callable(ping_fn):
                 ping_fn()
         else:
             from adapters.db.sqlite_adapter import SQLiteAdapter
 
-            sq = SQLiteAdapter(
-                os.getenv("DEFAULT_SQLITE_PATH", "data/Chinook_Sqlite.sqlite")
-            )
+            db_path = settings.default_sqlite_path or "data/Chinook_Sqlite.sqlite"
+            sq = SQLiteAdapter(db_path)
             ping_fn = getattr(sq, "ping", None)
             if callable(ping_fn):
                 ping_fn()
@@ -105,6 +120,7 @@ def root():
 
 @application.get("/health")
 def health():
+    # This is a higher-level health stub; real checks can be wired later
     return {"status": "ok", "db": "connected", "llm": "reachable", "uptime_sec": 123.4}
 
 
