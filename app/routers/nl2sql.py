@@ -23,8 +23,16 @@ from nl2sql.prom import REGISTRY
 from app.dependencies import get_nl2sql_service
 from app.services.nl2sql_service import NL2SQLService
 from app.settings import get_settings
+from app.errors import (
+    AppError,
+    DbNotFound,
+    SchemaRequired,
+    SchemaDeriveError,
+    PipelineConfigError,
+    PipelineRunError,
+)
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -111,7 +119,7 @@ os.makedirs(_DB_UPLOAD_DIR, exist_ok=True)
 UPLOAD_DIR = Path("data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-log.debug(
+logger.debug(
     "NL2SQL router configured",
     extra={"db_mode": DB_MODE, "upload_dir": _DB_UPLOAD_DIR},
 )
@@ -136,15 +144,21 @@ def schema_endpoint(
     """
     try:
         preview = svc.get_schema_preview(db_id=db_id, override=None)
-    except FileNotFoundError as exc:
+    except DbNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    except ValueError as exc:
-        # e.g. postgres mode without custom schema
+    except SchemaRequired as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except SchemaDeriveError as exc:
+        logger.debug("SchemaDeriveError in schema_endpoint", exc_info=exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    except AppError as exc:
+        logger.debug("AppError in schema_endpoint", exc_info=exc)
+        raise HTTPException(status_code=500, detail=str(exc))
     except Exception as exc:
-        log.debug("Failed to derive schema preview", exc_info=exc)
+        logger.exception("Unexpected error in schema_endpoint")
         raise HTTPException(
-            status_code=500, detail="failed to derive schema preview"
+            status_code=500,
+            detail="failed to derive schema preview",
         ) from exc
 
     return {"schema_preview": preview}
@@ -250,11 +264,11 @@ async def upload_db(file: UploadFile = File(...)):
         with open(out_path, "wb") as f:
             f.write(data)
     except Exception as e:
-        log.debug("Failed to store uploaded DB file", exc_info=e)
+        logger.debug("Failed to store uploaded DB file", exc_info=e)
         raise HTTPException(status_code=500, detail=f"Failed to store DB: {e}")
 
     register_db(db_id, out_path)
-    log.debug("Registered uploaded DB", extra={"db_id": db_id, "path": out_path})
+    logger.debug("Registered uploaded DB", extra={"db_id": db_id, "path": out_path})
     return {"db_id": db_id}
 
 
@@ -291,13 +305,25 @@ def nl2sql_handler(
             db_id=db_id,
             override=cast(Optional[str], getattr(request, "schema_preview", None)),
         )
-    except FileNotFoundError as exc:
+    except DbNotFound as exc:
+        # DB (or db_id) could not be resolved
         raise HTTPException(status_code=404, detail=str(exc))
-    except ValueError as exc:
+    except SchemaRequired as exc:
+        # For example: postgres mode without schema_preview
         raise HTTPException(status_code=400, detail=str(exc))
+    except SchemaDeriveError as exc:
+        logger.debug("Failed to derive schema preview", exc_info=exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    except AppError as exc:
+        # Any other domain-level error during schema resolution
+        logger.debug("AppError in schema preview", exc_info=exc)
+        raise HTTPException(status_code=500, detail=str(exc))
     except Exception as exc:
-        log.debug("Failed to prepare schema preview", exc_info=exc)
-        raise HTTPException(status_code=500, detail="failed to prepare schema") from exc
+        logger.debug("Unexpected error while preparing schema preview", exc_info=exc)
+        raise HTTPException(
+            status_code=500,
+            detail="failed to prepare schema",
+        ) from exc
 
     # ---- cache lookup ----
     now = time.time()
@@ -316,28 +342,45 @@ def nl2sql_handler(
             db_id=db_id,
             schema_preview=final_preview,
         )
-    except FileNotFoundError as exc:
+    except DbNotFound as exc:
+        # DB disappeared between schema and execution, or db_id invalid
         raise HTTPException(status_code=404, detail=str(exc))
+    except (PipelineConfigError, PipelineRunError) as exc:
+        # Config/YAML problems or runtime crash inside the pipeline
+        logger.debug("Pipeline error in NL2SQLService.run_query", exc_info=exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    except AppError as exc:
+        # Any other domain-level error during execution
+        logger.debug("AppError in NL2SQLService.run_query", exc_info=exc)
+        raise HTTPException(status_code=500, detail=str(exc))
     except Exception as exc:
-        log.debug("Pipeline crash in NL2SQLService.run_query", exc_info=exc)
-        raise HTTPException(status_code=500, detail="internal pipeline error") from exc
+        logger.debug(
+            "Unexpected pipeline crash in NL2SQLService.run_query", exc_info=exc
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="internal pipeline error",
+        ) from exc
 
-    # Type sanity check
+    # ---- type sanity check ----
     if not isinstance(result, FinalResult):
-        log.debug(
+        logger.debug(
             "Pipeline returned unexpected type",
             extra={"type": type(result).__name__},
         )
-        raise HTTPException(status_code=500, detail="pipeline returned unexpected type")
+        raise HTTPException(
+            status_code=500,
+            detail="pipeline returned unexpected type",
+        )
 
-    # Ambiguity path → 200 with clarification questions
+    # ---- ambiguity path → 200 with clarification questions ----
     if result.ambiguous:
         qs = result.questions or []
         return ClarifyResponse(ambiguous=True, questions=qs)
 
-    # Error path → 400 with joined details
+    # ---- error path → 400 with joined details ----
     if (not result.ok) or result.error:
-        log.debug(
+        logger.debug(
             "Pipeline reported failure",
             extra={
                 "ok": result.ok,
@@ -348,7 +391,7 @@ def nl2sql_handler(
         message = "; ".join(result.details or []) or "Unknown error"
         raise HTTPException(status_code=400, detail=message)
 
-    # Success path → 200 (normalize traces and executor result)
+    # ---- success path → 200 (normalize traces and executor result) ----
     traces = [_round_trace(t) for t in (result.traces or [])]
 
     response_result: Dict[str, Any] = {}
