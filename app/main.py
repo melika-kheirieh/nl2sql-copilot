@@ -8,6 +8,7 @@ from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_
 from nl2sql.prom import REGISTRY
 from app.routers import dev, nl2sql
 from app.settings import get_settings
+from app.exception_handlers import register_exception_handlers
 
 try:
     from dotenv import load_dotenv
@@ -28,6 +29,7 @@ application = FastAPI(
     version=settings.app_version,
     description="Convert natural language to safe & verified SQL",
 )
+register_exception_handlers(application)
 
 # Register only versioned API
 application.include_router(nl2sql.router, prefix="/api/v1")

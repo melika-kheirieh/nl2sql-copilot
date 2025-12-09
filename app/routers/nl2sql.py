@@ -4,7 +4,6 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 import os
 from pathlib import Path
-import time
 import uuid
 from typing import Any, Dict, Optional, Tuple, cast
 import hashlib
@@ -20,16 +19,12 @@ from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
 from app.state import register_db
 from nl2sql.pipeline import FinalResult
 from nl2sql.prom import REGISTRY
-from app.dependencies import get_nl2sql_service
+from app.dependencies import get_cache, get_nl2sql_service
+from app.cache import NL2SQLCache
 from app.services.nl2sql_service import NL2SQLService
 from app.settings import get_settings
 from app.errors import (
     AppError,
-    DbNotFound,
-    SchemaRequired,
-    SchemaDeriveError,
-    PipelineConfigError,
-    PipelineRunError,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,14 +73,25 @@ def _schema_key(preview: str) -> str:
     return hashlib.md5((preview or "").encode()).hexdigest()
 
 
-def _ck(db_id: Optional[str], query: str, preview: str) -> Tuple[str, str, str]:
+def _ck(
+    db_id: Optional[str],
+    query: str,
+    schema_preview: str,
+) -> str:
     """
-    Build a cache key from:
-    - db identifier (or 'default')
-    - normalized query
-    - schema preview hash
+    Build a stable cache key for (db_id, query, schema_preview).
+
+    We keep the external cache API string-based, and hash the
+    potentially large schema_preview to avoid huge dictionary keys.
     """
-    return (db_id or "default", _norm_q(query), _schema_key(preview))
+    # Normalize db_id
+    db_part = db_id or "__default__"
+
+    # Build a single string seed
+    seed = f"{db_part}\n{query}\n{schema_preview}"
+
+    # Short, deterministic key
+    return hashlib.sha1(seed.encode("utf-8")).hexdigest()
 
 
 def _cache_gc(now: float) -> None:
@@ -141,21 +147,16 @@ def schema_endpoint(
     - If db_id is provided, service will resolve the uploaded DB.
     - If not, service falls back to the default DB.
     - In postgres mode, caller must usually provide schema_preview explicitly.
+    Domain errors (AppError subclasses) are handled by the global exception handler.
+    This endpoint only wraps truly unexpected errors into a generic HTTP 500
     """
     try:
         preview = svc.get_schema_preview(db_id=db_id, override=None)
-    except DbNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except SchemaRequired as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except SchemaDeriveError as exc:
-        logger.debug("SchemaDeriveError in schema_endpoint", exc_info=exc)
-        raise HTTPException(status_code=500, detail=str(exc))
-    except AppError as exc:
-        logger.debug("AppError in schema_endpoint", exc_info=exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    except AppError:
+        # Let the global AppError handler deal with it.
+        raise
     except Exception as exc:
-        logger.exception("Unexpected error in schema_endpoint")
+        logger.exception("Unexpected error in schema_endpoint", exc_info=exc)
         raise HTTPException(
             status_code=500,
             detail="failed to derive schema preview",
@@ -287,7 +288,8 @@ def health():
 def nl2sql_handler(
     request: NL2SQLRequest,
     svc: NL2SQLService = Depends(get_nl2sql_service),
-):
+    cache: NL2SQLCache = Depends(get_cache),
+) -> NL2SQLResponse | ClarifyResponse | Dict[str, Any]:
     """
     Main NL→SQL handler.
 
@@ -303,37 +305,26 @@ def nl2sql_handler(
     try:
         final_preview = svc.get_schema_preview(
             db_id=db_id,
-            override=cast(Optional[str], getattr(request, "schema_preview", None)),
+            override=request.schema_preview,
         )
-    except DbNotFound as exc:
-        # DB (or db_id) could not be resolved
-        raise HTTPException(status_code=404, detail=str(exc))
-    except SchemaRequired as exc:
-        # For example: postgres mode without schema_preview
-        raise HTTPException(status_code=400, detail=str(exc))
-    except SchemaDeriveError as exc:
-        logger.debug("Failed to derive schema preview", exc_info=exc)
-        raise HTTPException(status_code=500, detail=str(exc))
-    except AppError as exc:
-        # Any other domain-level error during schema resolution
-        logger.debug("AppError in schema preview", exc_info=exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    except AppError:
+        # Domain-level errors are handled by the global AppError handler.
+        raise
     except Exception as exc:
-        logger.debug("Unexpected error while preparing schema preview", exc_info=exc)
+        logger.exception(
+            "Unexpected error while preparing schema preview",
+            exc_info=exc,
+        )
         raise HTTPException(
             status_code=500,
             detail="failed to prepare schema",
         ) from exc
 
     # ---- cache lookup ----
-    now = time.time()
-    _cache_gc(now)
-    ck = _ck(db_id, request.query, final_preview)
-    hit = _CACHE.get(ck)
-    if hit and now - hit[0] <= _CACHE_TTL:
-        cache_hits_total.inc()
-        return hit[1]  # early return with cached payload
-    cache_misses_total.inc()
+    cache_key = _ck(db_id, request.query, final_preview)
+    cached_payload = cache.get(cache_key)
+    if cached_payload is not None:
+        return cached_payload
 
     # ---- pipeline execution via service ----
     try:
@@ -342,20 +333,13 @@ def nl2sql_handler(
             db_id=db_id,
             schema_preview=final_preview,
         )
-    except DbNotFound as exc:
-        # DB disappeared between schema and execution, or db_id invalid
-        raise HTTPException(status_code=404, detail=str(exc))
-    except (PipelineConfigError, PipelineRunError) as exc:
-        # Config/YAML problems or runtime crash inside the pipeline
-        logger.debug("Pipeline error in NL2SQLService.run_query", exc_info=exc)
-        raise HTTPException(status_code=500, detail=str(exc))
-    except AppError as exc:
-        # Any other domain-level error during execution
-        logger.debug("AppError in NL2SQLService.run_query", exc_info=exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    except AppError:
+        # Let the global handler convert it to an HTTP response.
+        raise
     except Exception as exc:
-        logger.debug(
-            "Unexpected pipeline crash in NL2SQLService.run_query", exc_info=exc
+        logger.exception(
+            "Unexpected pipeline crash in NL2SQLService.run_query",
+            exc_info=exc,
         )
         raise HTTPException(
             status_code=500,
@@ -411,5 +395,5 @@ def nl2sql_handler(
     )
 
     # Store in cache (as plain dict)
-    _CACHE[ck] = (time.time(), cast(Dict[str, Any], payload.model_dump()))
+    cache.set(cache_key, payload.model_dump())
     return payload
