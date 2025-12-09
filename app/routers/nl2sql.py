@@ -4,7 +4,6 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 import os
 from pathlib import Path
-import time
 import uuid
 from typing import Any, Dict, Optional, Tuple, cast
 import hashlib
@@ -20,7 +19,8 @@ from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
 from app.state import register_db
 from nl2sql.pipeline import FinalResult
 from nl2sql.prom import REGISTRY
-from app.dependencies import get_nl2sql_service
+from app.dependencies import get_cache, get_nl2sql_service
+from app.cache import NL2SQLCache
 from app.services.nl2sql_service import NL2SQLService
 from app.settings import get_settings
 from app.errors import (
@@ -287,6 +287,7 @@ def health():
 def nl2sql_handler(
     request: NL2SQLRequest,
     svc: NL2SQLService = Depends(get_nl2sql_service),
+    cache: NL2SQLCache = Depends(get_cache),
 ):
     """
     Main NL→SQL handler.
@@ -326,14 +327,10 @@ def nl2sql_handler(
         ) from exc
 
     # ---- cache lookup ----
-    now = time.time()
-    _cache_gc(now)
-    ck = _ck(db_id, request.query, final_preview)
-    hit = _CACHE.get(ck)
-    if hit and now - hit[0] <= _CACHE_TTL:
-        cache_hits_total.inc()
-        return hit[1]  # early return with cached payload
-    cache_misses_total.inc()
+    cache_key = _ck(db_id, request.query, final_preview)
+    cached_payload = cache.get(cache_key)
+    if cached_payload is not None:
+        return cached_payload
 
     # ---- pipeline execution via service ----
     try:
@@ -411,5 +408,5 @@ def nl2sql_handler(
     )
 
     # Store in cache (as plain dict)
-    _CACHE[ck] = (time.time(), cast(Dict[str, Any], payload.model_dump()))
+    cache.set(cache_key, payload.model_dump())
     return payload
