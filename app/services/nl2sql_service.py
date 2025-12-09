@@ -11,6 +11,14 @@ from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.db.postgres_adapter import PostgresAdapter
 from app import state
 from app.settings import Settings
+from app.errors import (
+    AppError,
+    DbNotFound,
+    SchemaRequired,
+    SchemaDeriveError,
+    PipelineConfigError,
+    PipelineRunError,
+)
 
 Adapter = Any  # You can replace this with a Protocol later
 
@@ -34,23 +42,19 @@ class NL2SQLService:
         if mode == "postgres":
             dsn = (self.settings.postgres_dsn or "").strip()
             if not dsn:
-                raise RuntimeError("Postgres DSN is not configured")
+                raise PipelineConfigError("Postgres DSN is not configured")
             return PostgresAdapter(dsn=dsn)
 
         if db_id:
             state.cleanup_stale_dbs()
             path = state.get_db_path(db_id)
             if not path:
-                raise FileNotFoundError(f"Could not resolve DB for db_id={db_id!r}")
+                raise DbNotFound(f"Could not resolve DB for db_id={db_id!r}")
             return SQLiteAdapter(path=path)
 
-        # No db_id → use configured default SQLite DB
         default_path = self.settings.default_sqlite_path
-
         if not Path(default_path).exists():
-            raise FileNotFoundError(
-                f"SQLite database path does not exist: {default_path!r}"
-            )
+            raise DbNotFound(f"SQLite database path does not exist: {default_path!r}")
 
         return SQLiteAdapter(path=default_path)
 
@@ -109,13 +113,15 @@ class NL2SQLService:
 
         mode = self.settings.db_mode.lower()
         if mode == "postgres":
-            # For postgres we expect the caller to provide schema_preview; we don't
-            # do live introspection here.
-            raise ValueError("schema_preview is required in postgres mode")
+            raise SchemaRequired("schema_preview is required in postgres mode")
 
-        # sqlite: derive preview from the underlying file
-        adapter = self._select_adapter(db_id)
-        return self._introspect_sqlite_schema(adapter)
+        try:
+            adapter = self._select_adapter(db_id)
+            return self._introspect_sqlite_schema(adapter)
+        except DbNotFound:
+            raise
+        except Exception as exc:
+            raise SchemaDeriveError("failed to derive schema preview") from exc
 
     def run_query(
         self,
@@ -125,8 +131,32 @@ class NL2SQLService:
         schema_preview: str,
     ) -> FinalResult:
         """Build a pipeline for the given DB and run the query through it."""
-        adapter = self._select_adapter(db_id)
-        pipeline = pipeline_from_config_with_adapter(
-            self.settings.pipeline_config_path, adapter=adapter
-        )
-        return pipeline.run(user_query=query, schema_preview=schema_preview)
+        try:
+            adapter = self._select_adapter(db_id)
+        except AppError:
+            raise
+        except Exception as exc:
+            raise PipelineRunError("failed to select adapter") from exc
+
+        try:
+            pipeline = pipeline_from_config_with_adapter(
+                self.settings.pipeline_config_path,
+                adapter=adapter,
+            )
+        except FileNotFoundError as exc:
+            raise PipelineConfigError(
+                f"Pipeline config not found at {self.settings.pipeline_config_path!r}"
+            ) from exc
+        except Exception as exc:
+            raise PipelineConfigError(
+                f"Failed to build pipeline from {self.settings.pipeline_config_path!r}: {exc}"
+            ) from exc
+
+        try:
+            result = pipeline.run(user_query=query, schema_preview=schema_preview)
+        except AppError:
+            raise
+        except Exception as exc:
+            raise PipelineRunError("pipeline crashed during execution") from exc
+
+        return result
