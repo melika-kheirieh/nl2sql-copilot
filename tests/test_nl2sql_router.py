@@ -306,12 +306,39 @@ def test_traces_are_rounded_to_ints():
 
 def test_nl2sql_handler_returns_sql():
     """
-    Integration-style smoke test: use the real service wiring and ensure the
-    handler returns SQL and traces fields.
+    Integration-style smoke test on the router shape:
+    - hit the canonical path for nl2sql_handler
+    - ensure we get 200 with SQL + traces fields in the body.
+
+    We still rely on FastAPI wiring + dependency injection, but we stub the
+    underlying NL2SQLService with DummyService to avoid depending on the
+    real filesystem / demo DB / pipeline config.
     """
-    payload = {"query": "Top 5 albums by sales"}
-    r = client.post(path, json=payload)
-    assert r.status_code == 200
-    data = r.json()
-    assert "sql" in data
-    assert "traces" in data
+
+    def fake_run(*, user_query: str, schema_preview: str | None = None) -> FinalResult:
+        return FinalResult(
+            ok=True,
+            ambiguous=False,
+            error=False,
+            details=None,
+            questions=None,
+            sql="SELECT * FROM albums ORDER BY sales DESC LIMIT 5;",
+            rationale="Top 5 albums by sales",
+            verified=True,
+            traces=[fake_trace("planner"), fake_trace("executor")],
+        )
+
+    # Use the same DummyService plumbing as other tests
+    app.dependency_overrides[get_nl2sql_service] = lambda: DummyService(fake_run)
+    try:
+        payload = {"query": "Top 5 albums by sales"}
+        resp = client.post(path, json=payload)
+        assert resp.status_code == 200
+
+        data = resp.json()
+        assert "sql" in data
+        assert "traces" in data
+        assert data["sql"].lower().startswith("select")
+        assert isinstance(data["traces"], list) and data["traces"]
+    finally:
+        app.dependency_overrides.pop(get_nl2sql_service, None)
