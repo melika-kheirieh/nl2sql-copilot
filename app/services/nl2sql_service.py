@@ -29,43 +29,27 @@ class NL2SQLService:
     settings: Settings
 
     def _select_adapter(self, db_id: Optional[str]) -> Adapter:
-        """Select the DB adapter based on configured db_mode and optional db_id."""
-
         mode = self.settings.db_mode.lower()
 
         if mode == "postgres":
             dsn = (self.settings.postgres_dsn or "").strip()
             if not dsn:
                 raise RuntimeError("Postgres DSN is not configured")
-            # Single shared Postgres DB; db_id is ignored in this mode.
             return PostgresAdapter(dsn=dsn)
 
-        # Default: sqlite mode
         if db_id:
-            # Use uploaded / registered DB, if available
             state.cleanup_stale_dbs()
             path = state.get_db_path(db_id)
             if not path:
                 raise FileNotFoundError(f"Could not resolve DB for db_id={db_id!r}")
             return SQLiteAdapter(path=path)
 
-        # Fallback to default sqlite path(s)
+        # No db_id → use configured default SQLite DB
         default_path = self.settings.default_sqlite_path
 
-        if not default_path:
-            # If default path is empty, try implicit demo path
-            demo_path = "data/demo.db"
-            if not Path(demo_path).exists():
-                raise FileNotFoundError(
-                    f"No SQLite database found. "
-                    f"Tried default_sqlite_path={default_path!r} and demo.db"
-                )
-            default_path = demo_path
-
         if not Path(default_path).exists():
-            # Last-chance check before constructing the adapter
             raise FileNotFoundError(
-                f"SQLite database path does not exist: {default_path}"
+                f"SQLite database path does not exist: {default_path!r}"
             )
 
         return SQLiteAdapter(path=default_path)
