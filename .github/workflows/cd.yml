@@ -91,4 +91,4 @@ jobs:
           timeout_minutes: 10
           retry_on: error
           command: |
-            git push https://melikakheirieh:${HF_TOKEN}@huggingface.co/spaces/melikakheirieh/nl2sql-copilot main
+            git push https://melikakheirieh:${HF_TOKEN}@huggingface.co/spaces/melikakheirieh/nl2sql-copilot HEAD:main
