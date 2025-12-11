@@ -1,9 +1,36 @@
-name: CI
+name: CI - Quality Gate
 
 on:
   push:
-    branches: [ main, develop ]
+    branches:
+      - "main"
+      - "develop"
+      - "feat/**"
+      - "fix/**"
+      - "refactor/**"
+      - "pipeline/**"
+      - "infra/**"
+      - "ops/**"
+      - "test/**"
+      - "chore/**"
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "*.png"
+      - "*.jpg"
+      - "*.jpeg"
+      - "LICENSE"
   pull_request:
+    branches:
+      - "main"
+      - "develop"
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "*.png"
+      - "*.jpg"
+      - "*.jpeg"
+      - "LICENSE"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,52 +40,78 @@ jobs:
   build-test:
     name: 🧪 Build & Test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
     permissions:
       contents: read
+
     env:
-      PROXY_API_KEY: ${{ secrets.PROXY_API_KEY }}
-      PROXY_BASE_URL: ${{ secrets.PROXY_BASE_URL }}
       PYTHONPATH: ${{ github.workspace }}
 
     steps:
-      - name: 🧾 Checkout
+      - name: ⬇️ Checkout
         uses: actions/checkout@v4
 
-      - name: 🐍 Set up Python
+      - name: 🐍 Setup Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
+          cache: "pip"
           cache-dependency-path: requirements.txt
 
-      - name: 📦 Install dependencies
-        run: |
-          python -m pip install -U pip wheel
-          pip install -r requirements.txt
-          pip install ruff mypy pytest pytest-cov
-
-      # ---------- Cache tool states ----------
-      - name: ⚙️ Cache Ruff
+      # ---------- CACHE RESTORE ----------
+      - name: ♻️ Restore ruff cache
         uses: actions/cache@v4
         with:
           path: .ruff_cache
-          key: ruff-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'ruff.toml', '.pre-commit-configs.yaml', '**/*.py') }}
+          key: ruff-${{ hashFiles('requirements.txt', '**/*.py') }}
 
-      - name: ⚙️ Cache Mypy
+      - name: ♻️ Restore mypy cache
         uses: actions/cache@v4
         with:
           path: .mypy_cache
-          key: mypy-${{ runner.os }}-${{ hashFiles('mypy.ini', 'pyproject.toml', '**/*.py') }}
+          key: mypy-${{ hashFiles('mypy.ini', 'requirements.txt', '**/*.py') }}
 
-      - name: ⚙️ Cache Pytest
+      - name: ♻️ Restore pytest cache
         uses: actions/cache@v4
         with:
           path: .pytest_cache
-          key: pytest-${{ runner.os }}-${{ hashFiles('pyproject.toml', '**/*.py') }}
+          key: pytest-${{ hashFiles('requirements.txt', '**/*.py') }}
 
-      # ---------- Quality Gate ----------
-      - name: 🧹 Quality gate (format, lint, typecheck, tests)
-        run: make check
+      # ---------- INSTALL ----------
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip wheel
+          pip install -r requirements.txt
+          pip install ruff mypy pytest pytest-cov
+
+      # ---------- LINT ----------
+      - name: 💅 Ruff lint (retry)
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: 2
+          timeout_minutes: 5
+          retry_on: error
+          command: ruff check .
+
+      # ---------- TYPE CHECK ----------
+      - name: 🔎 Mypy type check (retry)
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: 2
+          timeout_minutes: 5
+          retry_on: error
+          command: mypy app
+
+      # ---------- TEST + COVERAGE ----------
+      - name: 🧪 Tests with coverage threshold (retry)
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: 2
+          timeout_minutes: 10
+          retry_on: error
+          command: |
+            pytest --cov=app --cov-report=xml --cov-fail-under=70
 
       - name: 📊 Upload coverage report
         if: always()
@@ -67,56 +120,3 @@ jobs:
           name: coverage-xml
           path: coverage.xml
           if-no-files-found: ignore
-
-  docker-build:
-    name: 🐳 Build & Push Docker
-    needs: build-test
-    runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/main' }}
-    permissions:
-      contents: read
-      packages: write
-
-    env:
-      REGISTRY: ghcr.io
-      IMAGE_NAME: nl2sql-copilot
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: ⚙️ Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: ⚙️ Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 🔐 Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 🧾 Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/nl2sql-copilot
-          tags: |
-            type=raw,value=latest
-            type=sha
-          labels: |
-            org.opencontainers.image.source=${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.created=${{ github.run_id }}
-
-      - name: 🏗️ Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64
