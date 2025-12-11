@@ -12,13 +12,11 @@ import logging
 # --- Third-party ---
 from fastapi import APIRouter, Depends, HTTPException, Security, UploadFile, File
 from fastapi.security import APIKeyHeader
-from prometheus_client import Counter
 
 # --- Local ---
 from app.schemas import NL2SQLRequest, NL2SQLResponse, ClarifyResponse
 from app.state import register_db
 from nl2sql.pipeline import FinalResult
-from nl2sql.prom import REGISTRY
 from app.dependencies import get_cache, get_nl2sql_service
 from app.cache import NL2SQLCache
 from app.services.nl2sql_service import NL2SQLService
@@ -51,11 +49,6 @@ def require_api_key(key: Optional[str] = Security(api_key_header)):
 
 ####################################
 # ---- Simple in-memory cache for NL→SQL responses ----
-
-cache_hits_total = Counter("cache_hits_total", "NL2SQL cache hits", registry=REGISTRY)
-cache_misses_total = Counter(
-    "cache_misses_total", "NL2SQL cache misses", registry=REGISTRY
-)
 
 # Cache TTL and max size from centralized settings
 _CACHE_TTL = settings.cache_ttl_sec

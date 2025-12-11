@@ -3,10 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from prometheus_client import Counter
-
-cache_hits_total = Counter("nl2sql_cache_hits", "NL2SQL cache hits")
-cache_misses_total = Counter("nl2sql_cache_misses", "NL2SQL cache misses")
+from nl2sql.metrics import cache_events_total
 
 
 class NL2SQLCache:
@@ -37,17 +34,17 @@ class NL2SQLCache:
 
         entry = self._store.get(key)
         if entry is None:
-            cache_misses_total.inc()
+            cache_events_total.labels(hit="false").inc()
             return None
 
         ts, payload = entry
         if now - ts <= self.ttl:
-            cache_hits_total.inc()
+            cache_events_total.labels(hit="true").inc()
             return payload
 
         # Entry is expired
         del self._store[key]
-        cache_misses_total.inc()
+        cache_events_total.labels(hit="false").inc()
         return None
 
     def set(self, key: str, payload: Dict[str, Any]) -> None:
