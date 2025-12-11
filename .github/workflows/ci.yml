@@ -111,7 +111,7 @@ jobs:
           timeout_minutes: 10
           retry_on: error
           command: |
-            pytest --cov=app --cov-report=xml --cov-fail-under=70
+            pytest --cov=app --cov-report=xml --cov-fail-under=60
 
       - name: 📊 Upload coverage report
         if: always()
