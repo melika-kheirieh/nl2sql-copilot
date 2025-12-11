@@ -74,15 +74,38 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    if: ${{ github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.event == 'push' &&
+            github.event.workflow_run.head_branch == 'main' }}
+
     steps:
-      - name: ⬇️ Checkout same commit approved by CI
+      - name: ⬇️ Checkout commit approved by CI
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
-          lfs: true
 
-      - name: 🔁 Push to HuggingFace Space (retry x3)
+      - name: 📥 Clone Hugging Face Space repo
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git clone https://melikakheirieh:${HF_TOKEN}@huggingface.co/spaces/melikakheirieh/nl2sql-copilot hf-space
+
+      - name: 📂 Sync selected project files into HF Space (no binaries)
+        run: |
+          rsync -av --delete adapters/ hf-space/adapters/
+          rsync -av --delete app/ hf-space/app/
+          rsync -av --delete configs/ hf-space/configs/
+          rsync -av --delete nl2sql/ hf-space/nl2sql/
+          rsync -av --delete demo/ hf-space/demo/
+          rsync -av --delete scripts/ hf-space/scripts/
+
+          rsync -av --delete requirements.txt hf-space/requirements.txt
+          rsync -av --delete huggingface.yml hf-space/huggingface.yml
+          rsync -av --delete config.py hf-space/config.py || true
+          rsync -av --delete .env.example hf-space/.env.example || true
+
+      - name: ✅ Commit & push to HF Space (with retry)
         uses: nick-fields/retry@v3
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -90,5 +113,23 @@ jobs:
           max_attempts: 3
           timeout_minutes: 10
           retry_on: error
+          retry_wait_seconds: 10
+          polling_interval_seconds: 1
+          warning_on_retry: true
+          continue_on_error: false
           command: |
-            git push https://melikakheirieh:${HF_TOKEN}@huggingface.co/spaces/melikakheirieh/nl2sql-copilot HEAD:main
+            cd hf-space
+
+            git status
+
+            if git diff --quiet; then
+              echo "No changes to sync to Hugging Face."
+              exit 0
+            fi
+
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+
+            git add .
+            git commit -m "Sync from GitHub main"
+            git push origin main
