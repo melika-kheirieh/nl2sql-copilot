@@ -77,6 +77,28 @@ services:
       - backend
 
 
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: nl2sql-alertmanager
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+    ports:
+      - "9093:9093"
+    networks:
+      - backend
+
+
+  alert-receiver:
+    build: ./alert-receiver
+    container_name: nl2sql-alert-receiver
+    ports:
+      - "9000:9000"
+    networks:
+      - backend
+
+
 networks:
   backend:
     driver: bridge

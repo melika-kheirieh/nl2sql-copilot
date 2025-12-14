@@ -1,0 +1,20 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: "default-webhook"
+  group_by: ["alertname", "service"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    - matchers:
+        - severity="critical"
+      receiver: "default-webhook"
+
+receivers:
+  - name: "default-webhook"
+    webhook_configs:
+      - url: "http://alert-receiver:9000/alerts"
+        send_resolved: true
