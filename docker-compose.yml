@@ -37,11 +37,8 @@ services:
     restart: unless-stopped
 
     volumes:
-      # 📘 Main Prometheus config
-      - ./provisioning/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      # 📘 Rules (recording + alert rules)
-      - ./provisioning/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
-      # 📘 Persistent TSDB storage
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
       - prometheus_data:/prometheus
 
     command:
