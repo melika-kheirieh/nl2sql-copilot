@@ -23,6 +23,10 @@ from app.services.nl2sql_service import NL2SQLService
 from app.settings import get_settings
 from app.errors import (
     AppError,
+    BadRequestError,
+    SafetyViolationError,
+    DependencyError,
+    PipelineRunError,
 )
 
 logger = logging.getLogger(__name__)
@@ -330,14 +334,12 @@ def nl2sql_handler(
         # Let the global handler convert it to an HTTP response.
         raise
     except Exception as exc:
-        logger.exception(
-            "Unexpected pipeline crash in NL2SQLService.run_query",
-            exc_info=exc,
+        logger.exception("Unexpected pipeline crash in NL2SQLService.run_query")
+        raise PipelineRunError(
+            message="Internal pipeline error.",
+            details=[str(exc)],
+            extra={"stage": "unknown"},
         )
-        raise HTTPException(
-            status_code=500,
-            detail="internal pipeline error",
-        ) from exc
 
     # ---- type sanity check ----
     if not isinstance(result, FinalResult):
@@ -345,9 +347,10 @@ def nl2sql_handler(
             "Pipeline returned unexpected type",
             extra={"type": type(result).__name__},
         )
-        raise HTTPException(
-            status_code=500,
-            detail="pipeline returned unexpected type",
+        raise PipelineRunError(
+            message="Pipeline returned unexpected type.",
+            details=[type(result).__name__],
+            extra={"stage": "unknown"},
         )
 
     # ---- ambiguity path → 200 with clarification questions ----
@@ -355,18 +358,66 @@ def nl2sql_handler(
         qs = result.questions or []
         return ClarifyResponse(ambiguous=True, questions=qs)
 
-    # ---- error path → 400 with joined details ----
+    # ---- error path: map pipeline failures to stable HTTP+JSON error contract ----
     if (not result.ok) or result.error:
         logger.debug(
             "Pipeline reported failure",
-            extra={
-                "ok": result.ok,
-                "error": result.error,
-                "details": result.details,
-            },
+            extra={"ok": result.ok, "error": result.error, "details": result.details},
         )
-        message = "; ".join(result.details or []) or "Unknown error"
-        raise HTTPException(status_code=400, detail=message)
+
+        details = list(result.details or [])
+        traces = list(result.traces or [])
+        last_stage = str(traces[-1].get("stage", "unknown")) if traces else "unknown"
+        details_l = " ".join(d.lower() for d in details)
+
+        # 1) Safety violations → 422
+        if last_stage == "safety":
+            raise SafetyViolationError(
+                message="Rejected by safety checks.",
+                details=details or None,
+                extra={"stage": last_stage},
+            )
+
+        # 2) Retryable dependency failures → 503
+        retry_hints = (
+            "timeout",
+            "timed out",
+            "rate limit",
+            "429",
+            "too many requests",
+            "locked",
+            "busy",
+            "unavailable",
+            "connection",
+        )
+        if any(h in details_l for h in retry_hints):
+            raise DependencyError(
+                message="Temporary dependency failure. Please retry.",
+                details=details or None,
+                extra={"stage": last_stage},
+            )
+
+        # 3) User-fixable parse/syntax-ish errors → 400
+        user_hints = (
+            "parse_error",
+            "non-select",
+            "explain not allowed",
+            "multiple statements",
+            "forbidden",
+        )
+        if any(h in details_l for h in user_hints):
+            raise BadRequestError(
+                message="Request could not be processed.",
+                details=details or None,
+                extra={"stage": last_stage},
+            )
+
+        # 4) Default → 500
+        raise PipelineRunError(
+            message="Pipeline failed unexpectedly.",
+            details=details or None,
+            extra={"stage": last_stage},
+        )
 
     # ---- success path → 200 (normalize traces and executor result) ----
     traces = [_round_trace(t) for t in (result.traces or [])]

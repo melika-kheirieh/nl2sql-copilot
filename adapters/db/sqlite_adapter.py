@@ -44,3 +44,20 @@ class SQLiteAdapter(DBAdapter):
             cols = [desc[0] for desc in cur.description]
             log.info("Query executed successfully. Returned %d rows.", len(rows))
             return rows, cols
+
+    def explain_query_plan(self, sql: str) -> None:
+        if not self.path.exists():
+            raise FileNotFoundError(f"SQLite DB does not exist: {self.path}")
+
+        sql_stripped = (sql or "").strip().rstrip(";")
+        if not sql_stripped.lower().startswith("select"):
+            raise ValueError("Only SELECT statements are allowed.")
+
+        uri = f"file:{self.path}?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=3) as conn:
+            # Extra safety: enforce query-only mode if available
+            try:
+                conn.execute("PRAGMA query_only = ON;")
+            except Exception:
+                pass
+            conn.execute(f"EXPLAIN QUERY PLAN {sql_stripped}")

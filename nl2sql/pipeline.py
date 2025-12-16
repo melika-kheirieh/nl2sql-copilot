@@ -422,22 +422,41 @@ class Pipeline:
             if r_exec.ok and isinstance(r_exec.data, dict):
                 exec_result = dict(r_exec.data)
 
-            # --- 6) verifier ---
+            # --- 6) verifier (run with repair for consistency) ---
             t0 = time.perf_counter()
-            r_ver = self._safe_stage(
+            r_ver = self._run_with_repair(
+                "verifier",
                 self.verifier.run,
+                repair_input_builder=self._sql_repair_input_builder,
+                max_attempts=1,
                 sql=sql,
                 exec_result=(r_exec.data or {}),
-                adapter=getattr(
-                    self.executor, "adapter", None
-                ),  # let verifier use adapter
+                adapter=getattr(self.executor, "adapter", None),
+                traces=traces,
             )
             dt = (time.perf_counter() - t0) * 1000.0
             stage_duration_ms.labels("verifier").observe(dt)
+
+            # Traces
             traces.extend(self._trace_list(r_ver))
             if not getattr(r_ver, "trace", None):
                 _fallback_trace("verifier", dt, r_ver.ok)
-            verified = bool(r_ver.data and r_ver.data.get("verified")) or r_ver.ok
+
+            # If verifier (or its repair) produced a new SQL, consume it
+            if r_ver.data and isinstance(r_ver.data, dict):
+                repaired_sql = r_ver.data.get("sql")
+                if repaired_sql:
+                    sql = repaired_sql
+
+            # Verified flag
+            verified = (
+                bool(
+                    r_ver.data
+                    and isinstance(r_ver.data, dict)
+                    and r_ver.data.get("verified")
+                )
+                or r_ver.ok
+            )
 
             # consume repaired SQL from verifier if any
             if r_ver.data and "sql" in r_ver.data and r_ver.data["sql"]:

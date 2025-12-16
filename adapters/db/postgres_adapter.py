@@ -68,3 +68,16 @@ class PostgresAdapter(DBAdapter):
                 desc = cur.description or ()
                 cols: List[str] = [d[0] for d in desc if d]
                 return rows, cols
+
+    def explain_query_plan(self, sql: str) -> None:
+        sql_stripped = (sql or "").strip().rstrip(";")
+        if not sql_stripped.lower().startswith("select"):
+            raise ValueError("Only SELECT statements are allowed.")
+
+        with psycopg.connect(self.dsn) as conn:
+            # Make it explicitly read-only at the session level
+            with conn.cursor() as cur:
+                cur.execute("SET TRANSACTION READ ONLY;")
+                cur.execute(f"EXPLAIN {sql_stripped}")
+                # We don't need the output; if planning fails, it raises.
+                _ = cur.fetchall()
