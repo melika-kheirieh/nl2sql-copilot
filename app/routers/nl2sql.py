@@ -23,11 +23,10 @@ from app.services.nl2sql_service import NL2SQLService
 from app.settings import get_settings
 from app.errors import (
     AppError,
-    BadRequestError,
-    SafetyViolationError,
-    DependencyError,
     PipelineRunError,
 )
+from nl2sql.errors.mapper import map_error
+from nl2sql.errors.codes import ErrorCode
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -358,65 +357,34 @@ def nl2sql_handler(
         qs = result.questions or []
         return ClarifyResponse(ambiguous=True, questions=qs)
 
-    # ---- error path: map pipeline failures to stable HTTP+JSON error contract ----
+    # ---- error path: contract-based mapping (Phase 3) ----
     if (not result.ok) or result.error:
         logger.debug(
             "Pipeline reported failure",
-            extra={"ok": result.ok, "error": result.error, "details": result.details},
+            extra={
+                "ok": result.ok,
+                "error": result.error,
+                "error_code": getattr(result, "error_code", None),
+                "details": result.details,
+            },
         )
 
-        details = list(result.details or [])
-        traces = list(result.traces or [])
-        last_stage = str(traces[-1].get("stage", "unknown")) if traces else "unknown"
-        details_l = " ".join(d.lower() for d in details)
+        # 1) Normalize code (never string-match here)
+        code = result.error_code or ErrorCode.PIPELINE_CRASH
 
-        # 1) Safety violations → 422
-        if last_stage == "safety":
-            raise SafetyViolationError(
-                message="Rejected by safety checks.",
-                details=details or None,
-                extra={"stage": last_stage},
-            )
+        # 2) Single source of truth for HTTP semantics
+        status, retryable = map_error(code)
 
-        # 2) Retryable dependency failures → 503
-        retry_hints = (
-            "timeout",
-            "timed out",
-            "rate limit",
-            "429",
-            "too many requests",
-            "locked",
-            "busy",
-            "unavailable",
-            "connection",
-        )
-        if any(h in details_l for h in retry_hints):
-            raise DependencyError(
-                message="Temporary dependency failure. Please retry.",
-                details=details or None,
-                extra={"stage": last_stage},
-            )
-
-        # 3) User-fixable parse/syntax-ish errors → 400
-        user_hints = (
-            "parse_error",
-            "non-select",
-            "explain not allowed",
-            "multiple statements",
-            "forbidden",
-        )
-        if any(h in details_l for h in user_hints):
-            raise BadRequestError(
-                message="Request could not be processed.",
-                details=details or None,
-                extra={"stage": last_stage},
-            )
-
-        # 4) Default → 500
-        raise PipelineRunError(
-            message="Pipeline failed unexpectedly.",
-            details=details or None,
-            extra={"stage": last_stage},
+        # 3) Stable error payload for UI/clients
+        raise HTTPException(
+            status_code=status,
+            detail={
+                "error": {
+                    "code": code.value,
+                    "retryable": retryable,
+                    "details": list(result.details or []),
+                }
+            },
         )
 
     # ---- success path → 200 (normalize traces and executor result) ----

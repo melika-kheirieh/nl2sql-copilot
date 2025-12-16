@@ -2,7 +2,7 @@ import os
 import time
 
 from fastapi import FastAPI, Request, Response, HTTPException
-from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse, JSONResponse
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 from nl2sql.prom import REGISTRY
@@ -37,6 +37,15 @@ application.include_router(nl2sql.router, prefix="/api/v1")
 # Register Dev-only routes (only when APP_ENV=dev)
 if os.getenv("APP_ENV", "dev").lower() == "dev":
     application.include_router(dev.router, prefix="/api/v1")
+
+
+@application.exception_handler(HTTPException)
+async def http_exception_to_error_contract(request: Request, exc: HTTPException):
+    if isinstance(exc.detail, dict) and "error" in exc.detail:
+        return JSONResponse(status_code=exc.status_code, content=exc.detail)
+
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
 
 # ----------------------------------------------------------------------------
 #  Prometheus Metrics Middleware

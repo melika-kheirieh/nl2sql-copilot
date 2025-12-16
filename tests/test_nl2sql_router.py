@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.dependencies import get_nl2sql_service
 from nl2sql.pipeline import FinalResult
+from nl2sql.errors.codes import ErrorCode
 
 client = TestClient(app)
 path = app.url_path_for("nl2sql_handler")
@@ -24,31 +25,69 @@ def assert_error_contract(
     expected_code: str | None = None,
     retryable: bool | None = None,
     details_contains: str | None = None,
-) -> None:
+) -> dict[str, Any]:
     """
     Assert the stable error contract produced by the AppError handler.
 
     Contract shape:
       {"error": {"code", "message", "details", "retryable", "request_id", "extra"}}
     """
-    assert resp.status_code == expected_status
+    assert resp.status_code == expected_status, resp.text
     body = resp.json()
-    assert "error" in body and isinstance(body["error"], dict)
+
+    assert isinstance(body, dict), f"Expected JSON object, got: {type(body)}"
+    assert "error" in body and isinstance(body["error"], dict), (
+        f"Missing 'error' in: {body}"
+    )
 
     err = body["error"]
-    assert "code" in err and isinstance(err["code"], str)
-    assert "message" in err and isinstance(err["message"], str)
-    assert "retryable" in err and isinstance(err["retryable"], bool)
-    assert "request_id" in err and isinstance(err["request_id"], str)
-    assert "extra" in err and isinstance(err["extra"], dict)
 
+    # --- required ---
+    assert "code" in err and isinstance(err["code"], str) and err["code"], (
+        f"Bad error.code: {err}"
+    )
+    assert "retryable" in err and isinstance(err["retryable"], bool), (
+        f"Bad error.retryable: {err}"
+    )
+
+    # --- optional (type-checked if present) ---
+    if "details" in err and err["details"] is not None:
+        assert isinstance(err["details"], list), (
+            f"error.details must be list[str]: {err}"
+        )
+        assert all(isinstance(x, str) for x in err["details"]), (
+            f"error.details must be list[str]: {err}"
+        )
+
+    if "message" in err:
+        assert isinstance(err["message"], str), f"error.message must be str: {err}"
+
+    if "request_id" in err:
+        assert isinstance(err["request_id"], str), (
+            f"error.request_id must be str: {err}"
+        )
+
+    if "extra" in err:
+        assert isinstance(err["extra"], dict), f"error.extra must be dict: {err}"
+
+    # --- expectations ---
     if expected_code is not None:
-        assert err["code"] == expected_code
+        assert err["code"] == expected_code, (
+            f"Expected code={expected_code}, got {err['code']}"
+        )
+
     if retryable is not None:
-        assert err["retryable"] is retryable
+        assert err["retryable"] is retryable, (
+            f"Expected retryable={retryable}, got {err['retryable']}"
+        )
+
     if details_contains is not None:
         details = err.get("details") or []
-        assert any(details_contains in d for d in details)
+        assert any(details_contains in d for d in details), (
+            f"'{details_contains}' not in details={details}"
+        )
+
+    return err
 
 
 class DummyService:
@@ -127,6 +166,7 @@ def test_error_route_safety_violation_is_422():
             ok=False,
             ambiguous=False,
             error=True,
+            error_code=ErrorCode.SAFETY_NON_SELECT,
             details=["Bad SQL"],
             questions=None,
             sql=None,
@@ -147,7 +187,7 @@ def test_error_route_safety_violation_is_422():
         assert_error_contract(
             resp,
             expected_status=422,
-            expected_code="safety_violation",
+            expected_code=ErrorCode.SAFETY_NON_SELECT.value,
             retryable=False,
             details_contains="Bad SQL",
         )
