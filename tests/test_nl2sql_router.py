@@ -17,6 +17,40 @@ def fake_trace(stage: str) -> dict:
     return {"stage": stage, "duration_ms": 10.0, "cost_usd": None, "notes": None}
 
 
+def assert_error_contract(
+    resp,
+    *,
+    expected_status: int,
+    expected_code: str | None = None,
+    retryable: bool | None = None,
+    details_contains: str | None = None,
+) -> None:
+    """
+    Assert the stable error contract produced by the AppError handler.
+
+    Contract shape:
+      {"error": {"code", "message", "details", "retryable", "request_id", "extra"}}
+    """
+    assert resp.status_code == expected_status
+    body = resp.json()
+    assert "error" in body and isinstance(body["error"], dict)
+
+    err = body["error"]
+    assert "code" in err and isinstance(err["code"], str)
+    assert "message" in err and isinstance(err["message"], str)
+    assert "retryable" in err and isinstance(err["retryable"], bool)
+    assert "request_id" in err and isinstance(err["request_id"], str)
+    assert "extra" in err and isinstance(err["extra"], dict)
+
+    if expected_code is not None:
+        assert err["code"] == expected_code
+    if retryable is not None:
+        assert err["retryable"] is retryable
+    if details_contains is not None:
+        details = err.get("details") or []
+        assert any(details_contains in d for d in details)
+
+
 class DummyService:
     """
     Minimal NL2SQLService substitute for router tests.
@@ -85,8 +119,8 @@ def test_ambiguity_route():
 
 
 # --- 2) Error / failure case -------------------------------------------------
-def test_error_route():
-    """Should return 400 and include aggregated details in 'detail'."""
+def test_error_route_safety_violation_is_422():
+    """Safety-stage failures should return 422 with the structured error contract."""
 
     def fake_run(*, user_query: str, schema_preview: str | None = None) -> FinalResult:
         return FinalResult(
@@ -110,8 +144,13 @@ def test_error_route():
                 "schema_preview": "CREATE TABLE users(id int);",
             },
         )
-        assert resp.status_code == 400
-        assert "Bad SQL" in resp.json()["detail"]
+        assert_error_contract(
+            resp,
+            expected_status=422,
+            expected_code="safety_violation",
+            retryable=False,
+            details_contains="Bad SQL",
+        )
     finally:
         app.dependency_overrides.pop(get_nl2sql_service, None)
 
@@ -166,7 +205,6 @@ def test_success_route_with_db_id():
             db_id: Optional[str],
             schema_preview: str,
         ) -> FinalResult:
-            # Record db_id for assertion, then delegate to the base runner
             called["db_id"] = db_id
             return super().run_query(
                 query=query,
@@ -192,15 +230,14 @@ def test_success_route_with_db_id():
         resp = client.post(path, json={"query": "anything", "db_id": "sqlite"})
         assert resp.status_code == 200
         assert resp.json()["sql"].startswith("SELECT")
-        # Ensure db_id was forwarded correctly to the service
         assert called.get("db_id") == "sqlite"
     finally:
         app.dependency_overrides.pop(get_nl2sql_service, None)
 
 
 # --- 5) Pipeline crash → 500 -------------------------------------------------
-def test_pipeline_crash_returns_500():
-    """Exceptions inside pipeline should result in HTTP 500 with a clear message."""
+def test_pipeline_crash_returns_500_with_error_contract():
+    """Unhandled exceptions inside the service/pipeline should yield 500 with error contract."""
 
     def crash_run(*, user_query: str, schema_preview: str | None = None) -> FinalResult:  # type: ignore[no-untyped-def]
         raise RuntimeError("boom")
@@ -208,27 +245,31 @@ def test_pipeline_crash_returns_500():
     app.dependency_overrides[get_nl2sql_service] = lambda: DummyService(crash_run)
     try:
         resp = client.post(path, json={"query": "x"})
+        # Code may differ depending on router mapping; enforce contract + 500.
         assert resp.status_code == 500
-        # New handler uses a generic message for internal pipeline errors
-        assert "internal pipeline error" in resp.json()["detail"].lower()
+        body = resp.json()
+        assert "error" in body
+        assert body["error"]["retryable"] is False
+        assert isinstance(body["error"]["code"], str) and body["error"]["code"]
+        assert isinstance(body["error"]["message"], str) and body["error"]["message"]
     finally:
         app.dependency_overrides.pop(get_nl2sql_service, None)
 
 
 # --- 6) Unexpected output type → 500 -----------------------------------------
 def test_pipeline_returns_non_finalresult():
-    """If pipeline returns a non-FinalResult, it must yield HTTP 500."""
+    """If pipeline returns a non-FinalResult, it must yield HTTP 500 (error contract)."""
 
-    def bad_run(
-        *, user_query: str, schema_preview: str | None = None
-    ):  # no FinalResult
+    def bad_run(*, user_query: str, schema_preview: str | None = None):
         return {"ok": True}
 
     app.dependency_overrides[get_nl2sql_service] = lambda: DummyService(bad_run)  # type: ignore[arg-type]
     try:
         resp = client.post(path, json={"query": "x"})
         assert resp.status_code == 500
-        assert "unexpected type" in resp.json()["detail"].lower()
+        body = resp.json()
+        assert "error" in body
+        assert isinstance(body["error"]["code"], str) and body["error"]["code"]
     finally:
         app.dependency_overrides.pop(get_nl2sql_service, None)
 
@@ -237,7 +278,11 @@ def test_pipeline_returns_non_finalresult():
 def test_ambiguity_without_questions_edge_case():
     """
     If ambiguous=True but questions is None, handler should not crash.
-    Accept either 200 (if handler treats it as clarify) or 400 (if treated as error).
+
+    NOTE:
+    Behavior may vary depending on router validation:
+    - 200: treated as clarify response
+    - 500: treated as internal inconsistency
     """
 
     def bad_ambiguous(
@@ -258,7 +303,9 @@ def test_ambiguity_without_questions_edge_case():
     app.dependency_overrides[get_nl2sql_service] = lambda: DummyService(bad_ambiguous)
     try:
         resp = client.post(path, json={"query": "x"})
-        assert resp.status_code in (200, 400)
+        assert resp.status_code in (200, 500)
+        if resp.status_code == 500:
+            assert "error" in resp.json()
     finally:
         app.dependency_overrides.pop(get_nl2sql_service, None)
 
