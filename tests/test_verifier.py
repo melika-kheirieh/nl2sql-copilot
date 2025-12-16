@@ -5,6 +5,7 @@ import pytest
 
 from nl2sql.verifier import Verifier
 from nl2sql.types import StageTrace
+from adapters.db.sqlite_adapter import SQLiteAdapter
 
 
 class AlwaysOKAdapter:
@@ -23,22 +24,6 @@ def sqlite_db_path(tmp_path) -> str:
     conn.commit()
     conn.close()
     return str(p)
-
-
-class SQLiteExplainAdapter:
-    """Adapter used by verifier plan-check tests."""
-
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-
-    def explain_query_plan(self, sql: str) -> None:
-        sql_s = (sql or "").strip().rstrip(";")
-        with sqlite3.connect(self.db_path) as conn:
-            try:
-                conn.execute("PRAGMA query_only = ON;")
-            except Exception:
-                pass
-            conn.execute(f"EXPLAIN QUERY PLAN {sql_s}")
 
 
 def test_verifier_parse_error_is_not_ok():
@@ -71,14 +56,14 @@ def test_verifier_distinct_projection_is_ok_with_aggregate():
 
 def test_verifier_plan_check_ok(sqlite_db_path: str):
     v = Verifier()
-    adapter = SQLiteExplainAdapter(sqlite_db_path)
+    adapter = SQLiteAdapter(sqlite_db_path)
     r = v.verify("SELECT name FROM users;", adapter=adapter)
     assert r.ok, r.error
 
 
 def test_verifier_plan_check_missing_table(sqlite_db_path: str):
     v = Verifier()
-    adapter = SQLiteExplainAdapter(sqlite_db_path)
+    adapter = SQLiteAdapter(sqlite_db_path)
     r = v.verify("SELECT name FROM imaginary_table;", adapter=adapter)
     assert not r.ok
     assert any("no such table" in e.lower() for e in (r.error or []))
