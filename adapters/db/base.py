@@ -12,3 +12,6 @@ class DBAdapter(Protocol):
 
     def execute(self, sql: str) -> Tuple[List[Tuple[Any, ...]], List[str]]:
         """Execute a SELECT query and return (rows, columns)."""
+
+    def explain_query_plan(self, sql: str) -> None:
+        """Validate SQL by asking the DB to plan it (must be read-only). Raise on failure."""

@@ -1,75 +1,92 @@
+from __future__ import annotations
+
+import sqlite3
+import pytest
+
 from nl2sql.verifier import Verifier
 from nl2sql.types import StageTrace
 
 
-# --- Tiny fake adapter for preview execution ---------------------------------
-class FakeAdapter:
-    """Mimics adapter.execute_preview(sql) returning dicts with ok/error."""
+class AlwaysOKAdapter:
+    """Minimal adapter for lint-only tests."""
 
-    def __init__(self, will_ok=True, error=None):
-        self.will_ok = will_ok
-        self.error = error
-
-    def execute_preview(self, sql: str):
-        if self.will_ok:
-            return {"ok": True}
-        if self.error:
-            return {"ok": False, "error": self.error}
-        return {"ok": False}
+    def explain_query_plan(self, sql: str) -> None:
+        return None
 
 
-# -----------------------------------------------------------------------------
+@pytest.fixture
+def sqlite_db_path(tmp_path) -> str:
+    p = tmp_path / "test.db"
+    conn = sqlite3.connect(str(p))
+    conn.execute("CREATE TABLE users(id INTEGER, name TEXT);")
+    conn.execute("INSERT INTO users VALUES (1, 'a');")
+    conn.commit()
+    conn.close()
+    return str(p)
+
+
+class SQLiteExplainAdapter:
+    """Adapter used by verifier plan-check tests."""
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+
+    def explain_query_plan(self, sql: str) -> None:
+        sql_s = (sql or "").strip().rstrip(";")
+        with sqlite3.connect(self.db_path) as conn:
+            try:
+                conn.execute("PRAGMA query_only = ON;")
+            except Exception:
+                pass
+            conn.execute(f"EXPLAIN QUERY PLAN {sql_s}")
 
 
 def test_verifier_parse_error_is_not_ok():
     v = Verifier()
-    fake = FakeAdapter(will_ok=True)
-    r = v.verify("SELCT * FRM broken;", adapter=fake)  # intentionally broken
+    r = v.verify("SELCT * FRM broken;")  # intentionally broken
     assert not r.ok
     assert r.error and "parse_error" in r.error
 
 
 def test_verifier_plain_aggregate_without_groupby_is_flagged():
     v = Verifier()
-    fake = FakeAdapter(will_ok=True)
-    r = v.verify("SELECT COUNT(*), country FROM customers;", adapter=fake)
+    r = v.verify("SELECT COUNT(*), country FROM customers;")
     assert not r.ok
     assert r.error and "aggregation_without_group_by" in r.error
 
 
 def test_verifier_windowed_aggregate_is_ok_without_groupby():
     v = Verifier()
-    fake = FakeAdapter(will_ok=True)
     r = v.verify(
         "SELECT customer_id, SUM(amount) OVER (PARTITION BY customer_id) AS s FROM payments;",
-        adapter=fake,
     )
     assert r.ok, r.error
 
 
 def test_verifier_distinct_projection_is_ok_with_aggregate():
     v = Verifier()
-    fake = FakeAdapter(will_ok=True)
-    r = v.verify(
-        "SELECT DISTINCT artist_id, COUNT(*) FROM albums;",
-        adapter=fake,
-    )
-    # DISTINCT + aggregate can be valid; avoid false positives.
+    r = v.verify("SELECT DISTINCT artist_id, COUNT(*) FROM albums;")
     assert r.ok or "aggregation_without_group_by" not in (r.error or [])
 
 
-def test_verifier_exec_error_is_reported():
+def test_verifier_plan_check_ok(sqlite_db_path: str):
     v = Verifier()
-    fake = FakeAdapter(will_ok=False, error="no such table: imaginary_table")
-    r = v.verify("SELECT name FROM imaginary_table;", adapter=fake)
+    adapter = SQLiteExplainAdapter(sqlite_db_path)
+    r = v.verify("SELECT name FROM users;", adapter=adapter)
+    assert r.ok, r.error
+
+
+def test_verifier_plan_check_missing_table(sqlite_db_path: str):
+    v = Verifier()
+    adapter = SQLiteExplainAdapter(sqlite_db_path)
+    r = v.verify("SELECT name FROM imaginary_table;", adapter=adapter)
     assert not r.ok
-    assert any(("exec_error" in e) or ("exec_exception" in e) for e in (r.error or []))
+    assert any("no such table" in e.lower() for e in (r.error or []))
 
 
 def test_verifier_returns_trace_with_int_duration():
     v = Verifier()
-    fake = FakeAdapter(will_ok=True)
-    r = v.verify("SELECT 1;", adapter=fake)
+    adapter = AlwaysOKAdapter()
+    r = v.verify("SELECT 1 FROM users;", adapter=adapter)
     assert isinstance(r.trace, StageTrace)
-    # Some implementations store duration as int milliseconds:
     assert isinstance(r.trace.duration_ms, int)

@@ -4,32 +4,33 @@ import re
 import time
 from typing import Any, Dict
 
+from nl2sql.metrics import verifier_checks_total, verifier_failures_total
 from nl2sql.types import StageResult, StageTrace
-from nl2sql.metrics import (
-    verifier_checks_total,
-    verifier_failures_total,
-)
+
+from adapters.db.base import DBAdapter
 
 
 class Verifier:
-    """Static verifier used by tests.
-
-    Provides verify(...) for tests and run(...) for pipeline.
+    """
+    Verifier stage:
+    - Lightweight sanity checks (lint-like; NOT safety policy)
+    - Optional DB-backed plan validation via adapter.explain_query_plan(sql)
+      (read-only, no query execution)
     """
 
     required = False
 
-    def verify(self, sql: str, *, adapter: Any | None = None) -> StageResult:
+    def verify(self, sql: str, *, adapter: DBAdapter | None = None) -> StageResult:
         t0 = time.perf_counter()
         notes: Dict[str, Any] = {}
-        reason = "ok"  # new field
+        reason = "ok"
 
         s = (sql or "").strip()
         sl = s.lower()
         notes["sql_length"] = len(s)
 
         try:
-            # --- quick parse sanity: require SELECT and FROM ---
+            # --- quick sanity: require SELECT and FROM (lint-like) ---
             has_select = bool(re.search(r"\bselect\b", sl))
             has_from = bool(re.search(r"\bfrom\b", sl))
             notes["has_select"] = has_select
@@ -45,6 +46,7 @@ class Verifier:
                 )
 
             # --- semantic sanity: aggregation without GROUP BY (unless allowed) ---
+            # This is NOT a safety rule; it is a quality check to catch common mistakes.
             has_over = " over (" in sl
             has_group_by = " group by " in sl
             has_distinct = sl.startswith("select distinct") or (
@@ -83,20 +85,29 @@ class Verifier:
                     reason=reason,
                 )
 
-            # --- execution-error sentinel for tests ---
-            if "imaginary_table" in sl:
-                reason = "exec-error"
-                return self._fail(
-                    t0,
-                    notes,
-                    error=["exec_error: no such table: imaginary_table"],
-                    reason=reason,
-                )
+            # --- DB-backed plan validation (read-only), if adapter provided ---
+            # Safety policy (SELECT-only, no multi-statement, etc.) must be enforced upstream.
+            if adapter is not None:
+                try:
+                    adapter.explain_query_plan(s)
+                    notes["plan_check"] = "ok"
+                except Exception as e:
+                    reason = "plan-error"
+                    notes["plan_check"] = "failed"
+                    return self._fail(
+                        t0,
+                        notes,
+                        error=[str(e)],
+                        reason=reason,
+                        exc_type=type(e).__name__,
+                    )
 
             # --- pass ---
             dt = int(round((time.perf_counter() - t0) * 1000.0))
             notes.update({"verified": True, "reason": reason})
+
             verifier_checks_total.labels(ok="true").inc()
+
             trace = StageTrace(
                 stage="verifier",
                 duration_ms=dt,
@@ -106,6 +117,7 @@ class Verifier:
             return StageResult(ok=True, data={"verified": True}, trace=trace)
 
         except Exception as e:
+            # Unexpected verifier crash (bug)
             reason = "exception"
             return self._fail(
                 t0,
@@ -114,6 +126,16 @@ class Verifier:
                 reason=reason,
                 exc_type=type(e).__name__,
             )
+
+    def run(
+        self,
+        *,
+        sql: str,
+        exec_result: Dict[str, Any],
+        adapter: DBAdapter | None = None,
+    ) -> StageResult:
+        # exec_result kept for signature compatibility, not used here.
+        return self.verify(sql, adapter=adapter)
 
     def _fail(
         self,
@@ -125,6 +147,7 @@ class Verifier:
         exc_type: str | None = None,
     ) -> StageResult:
         dt = int(round((time.perf_counter() - t0) * 1000.0))
+
         notes.update({"verified": False, "reason": reason})
         if exc_type:
             notes["exception_type"] = exc_type
@@ -144,8 +167,3 @@ class Verifier:
             trace=trace,
             error=error,
         )
-
-    def run(
-        self, *, sql: str, exec_result: Dict[str, Any], adapter: Any = None
-    ) -> StageResult:
-        return self.verify(sql, adapter=adapter)
