@@ -3,6 +3,7 @@ import traceback
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
 import time
+import inspect
 
 from nl2sql.types import StageResult
 from nl2sql.ambiguity_detector import AmbiguityDetector
@@ -239,6 +240,25 @@ class Pipeline:
             "schema_preview": kwargs.get("schema_preview", ""),
         }
 
+    def _call_verifier(self, *, sql: str, exec_result: Dict[str, Any]) -> StageResult:
+        """
+        Call verifier with a backward-compatible signature.
+        Some verifiers accept `adapter=...`, some don't.
+        """
+        kwargs: Dict[str, Any] = {"sql": sql, "exec_result": exec_result}
+
+        adapter = getattr(self.executor, "adapter", None)
+        if adapter is not None:
+            try:
+                params = inspect.signature(self.verifier.run).parameters
+                if "adapter" in params:
+                    kwargs["adapter"] = adapter
+            except (TypeError, ValueError):
+                # If signature introspection fails, fall back to the minimal call.
+                pass
+
+        return self.verifier.run(**kwargs)
+
     def run(
         self,
         *,
@@ -315,6 +335,7 @@ class Pipeline:
                     ambiguous=False,
                     error=True,
                     details=r_plan.error,
+                    error_code=ErrorCode.PIPELINE_CRASH,
                     questions=None,
                     sql=None,
                     rationale=None,
@@ -347,6 +368,7 @@ class Pipeline:
                     ambiguous=False,
                     error=True,
                     details=r_gen.error,
+                    error_code=ErrorCode.LLM_BAD_OUTPUT,
                     questions=None,
                     sql=None,
                     rationale=None,
@@ -368,6 +390,7 @@ class Pipeline:
                     ambiguous=False,
                     error=True,
                     details=["empty_sql"],
+                    error_code=ErrorCode.LLM_BAD_OUTPUT,
                     questions=None,
                     sql=None,
                     rationale=rationale,
@@ -397,6 +420,7 @@ class Pipeline:
                     ambiguous=False,
                     error=True,
                     details=r_safe.error,
+                    error_code=r_safe.error_code,
                     questions=None,
                     sql=sql,
                     rationale=rationale,
@@ -431,12 +455,11 @@ class Pipeline:
             t0 = time.perf_counter()
             r_ver = self._run_with_repair(
                 "verifier",
-                self.verifier.run,
+                self._call_verifier,
                 repair_input_builder=self._sql_repair_input_builder,
                 max_attempts=1,
                 sql=sql,
                 exec_result=(r_exec.data or {}),
-                adapter=getattr(self.executor, "adapter", None),
                 traces=traces,
             )
             dt = (time.perf_counter() - t0) * 1000.0
@@ -522,10 +545,9 @@ class Pipeline:
                     # verifier again
                     t0 = time.perf_counter()
                     r_ver2 = self._safe_stage(
-                        self.verifier.run,
+                        self._call_verifier,
                         sql=sql,
                         exec_result=(r_exec2.data or {}),
-                        adapter=getattr(self.executor, "adapter", None),
                     )
                     dt2 = (time.perf_counter() - t0) * 1000.0
                     stage_duration_ms.labels("verifier").observe(dt2)
