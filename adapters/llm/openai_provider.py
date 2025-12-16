@@ -43,6 +43,10 @@ class OpenAIProvider(LLMProvider):
         """Return metadata of the last LLM call (tokens, cost, sql_length, kind)."""
         return dict(self._last_usage)
 
+    def _create_chat_completion(self, **kwargs):
+        """OpenAI SDK seam for stable unit testing."""
+        return self.client.chat.completions.create(**kwargs)
+
     def __init__(self) -> None:
         """Initialize OpenAI client with config from environment."""
         api_key, base_url, model = _resolve_api_config()
@@ -84,7 +88,7 @@ Database Schema:
 
 Create a step-by-step plan to answer this question with SQL."""
 
-        completion = self.client.chat.completions.create(
+        completion = self._create_chat_completion(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -181,7 +185,7 @@ Now generate the SQL for the given question:"""
         if clarify_answers:
             user_prompt += f"\n\nAdditional context: {clarify_answers}"
 
-        completion = self.client.chat.completions.create(
+        completion = self._create_chat_completion(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -316,7 +320,7 @@ Database Schema:
 
 Return the corrected SQL (keep it simple):"""
 
-        completion = self.client.chat.completions.create(
+        completion = self._create_chat_completion(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -419,7 +423,7 @@ Database Schema:
 Please answer these clarification questions:
 {chr(10).join(f"{i + 1}. {q}" for i, q in enumerate(questions))}"""
 
-        completion = self.client.chat.completions.create(
+        completion = self._create_chat_completion(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},

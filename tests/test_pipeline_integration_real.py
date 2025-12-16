@@ -3,7 +3,11 @@ from nl2sql.pipeline import Pipeline
 from nl2sql.types import StageResult, StageTrace
 
 
-# --- Realistic dummy stages ----------------------------------
+# ---------------------------------------------------------------------------
+# Realistic dummy stages (no mocks, real execution)
+# ---------------------------------------------------------------------------
+
+
 class DetectorOK:
     """Always returns no ambiguities."""
 
@@ -39,10 +43,15 @@ class SafetyReadOnly:
                 data={"sql": sql},
                 trace=StageTrace(stage="safety", duration_ms=0),
             )
+
         return StageResult(
             ok=False,
             error=["Unsafe query"],
-            trace=StageTrace(stage="safety", duration_ms=0, notes={"reason": "unsafe"}),
+            trace=StageTrace(
+                stage="safety",
+                duration_ms=0,
+                notes={"reason": "unsafe"},
+            ),
         )
 
 
@@ -50,7 +59,6 @@ class ExecutorSQLite:
     """Executes the SQL query on a temporary in-memory SQLite database."""
 
     def __init__(self):
-        # create in-memory DB and seed some rows
         self.conn = sqlite3.connect(":memory:")
         self._seed()
 
@@ -86,7 +94,9 @@ class VerifierCheckCount:
             ok=ok,
             data={"verified": ok},
             trace=StageTrace(
-                stage="verifier", duration_ms=0, notes={"rows_len": len(rows)}
+                stage="verifier",
+                duration_ms=0,
+                notes={"rows_len": len(rows)},
             ),
         )
 
@@ -98,9 +108,17 @@ class RepairNoOp:
         return StageResult(ok=False, error=["no repair needed"])
 
 
-# --- Integration test ----------------------------------------
-def test_pipeline_end_to_end_real_sqlite():
-    """Full NL2SQL pipeline test on real SQLite DB with no mocks."""
+# ---------------------------------------------------------------------------
+# End-to-end integration test (real SQLite)
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_end_to_end_sqlite_happy_path():
+    """
+    Full NL2SQL pipeline integration test:
+    NL → SQL → SQLite execution → verification.
+    No mocks, real database, deterministic.
+    """
     pipe = Pipeline(
         detector=DetectorOK(),
         planner=PlannerLLM(),
@@ -112,18 +130,23 @@ def test_pipeline_end_to_end_real_sqlite():
     )
 
     result = pipe.run(
-        user_query="count users per city", schema_preview="users(id, city)"
+        user_query="count users per city",
+        schema_preview="users(id, city)",
     )
 
-    # --- Assertions ---
+    # --- Pipeline contract ---
     assert result.ok
     assert result.verified
     assert not result.error
-    assert "SELECT" in result.sql
 
-    # Ensure pipeline produced valid SQL and traces
+    # --- SQL sanity ---
+    assert result.sql.strip().lower().startswith("select")
+
+    # --- Traces / observability ---
     assert isinstance(result.traces, list)
     assert result.traces  # not empty
 
-    # Logical validation
-    assert "city" in result.sql.lower()
+    # --- Logical validation on real DB result ---
+    rows = result.result["rows"]
+    assert {"city": "Berlin", "cnt": 2} in rows
+    assert {"city": "Munich", "cnt": 1} in rows

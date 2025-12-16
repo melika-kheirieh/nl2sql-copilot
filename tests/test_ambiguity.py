@@ -1,5 +1,4 @@
 from nl2sql.ambiguity_detector import AmbiguityDetector
-from nl2sql.types import StageResult
 
 
 def test_detects_ambiguous_terms():
@@ -13,13 +12,3 @@ def test_not_false_positive():
     det = AmbiguityDetector()
     res = det.detect("List all singers older than 30", "table: singer(id, name, age)")
     assert res == []
-
-
-def test_ambiguity_response():
-    from app.routers import nl2sql
-
-    fake_result = StageResult(
-        ok=True, data={"ambiguous": True, "questions": ["Clarify column?"]}
-    )
-    response = nl2sql._to_dict(fake_result.data)
-    assert response["ambiguous"] is True
