@@ -14,6 +14,7 @@ from nl2sql.verifier import Verifier
 from nl2sql.repair import Repair
 from nl2sql.stubs import NoOpExecutor, NoOpRepair, NoOpVerifier
 from nl2sql.metrics import stage_duration_ms, pipeline_runs_total, repair_attempts_total
+from nl2sql.errors.codes import ErrorCode
 
 
 @dataclass(frozen=True)
@@ -21,12 +22,16 @@ class FinalResult:
     ok: bool
     ambiguous: bool
     error: bool
+
     details: Optional[List[str]]
     sql: Optional[str]
     rationale: Optional[str]
     verified: Optional[bool]
     questions: Optional[List[str]]
     traces: List[dict]
+
+    error_code: Optional[ErrorCode] = None
+
     result: Optional[Dict[str, Any]] = None
 
 

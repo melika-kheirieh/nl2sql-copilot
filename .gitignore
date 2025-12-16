@@ -21,3 +21,6 @@ venv/
 dist/
 build/
 coverage/
+
+# macOS
+.DS_Store

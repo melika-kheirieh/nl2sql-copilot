@@ -4,6 +4,7 @@ import re
 import time
 from typing import Any, Dict
 
+from nl2sql.errors.codes import ErrorCode
 from nl2sql.metrics import verifier_checks_total, verifier_failures_total
 from nl2sql.types import StageResult, StageTrace
 
@@ -43,6 +44,7 @@ class Verifier:
                     notes,
                     error=["parse_error"],
                     reason=reason,
+                    error_code=ErrorCode.PLAN_SYNTAX_ERROR,  # best-fit for malformed SQL
                 )
 
             # --- semantic sanity: aggregation without GROUP BY (unless allowed) ---
@@ -83,6 +85,7 @@ class Verifier:
                     notes,
                     error=["aggregation_without_group_by"],
                     reason=reason,
+                    error_code=ErrorCode.PLAN_SYNTAX_ERROR,
                 )
 
             # --- DB-backed plan validation (read-only), if adapter provided ---
@@ -94,12 +97,16 @@ class Verifier:
                 except Exception as e:
                     reason = "plan-error"
                     notes["plan_check"] = "failed"
+
+                    code = self._classify_plan_error(e)
+
                     return self._fail(
                         t0,
                         notes,
                         error=[str(e)],
                         reason=reason,
                         exc_type=type(e).__name__,
+                        error_code=code,
                     )
 
             # --- pass ---
@@ -125,6 +132,7 @@ class Verifier:
                 error=[str(e)],
                 reason=reason,
                 exc_type=type(e).__name__,
+                error_code=ErrorCode.PIPELINE_CRASH,
             )
 
     def run(
@@ -137,6 +145,25 @@ class Verifier:
         # exec_result kept for signature compatibility, not used here.
         return self.verify(sql, adapter=adapter)
 
+    def _classify_plan_error(self, e: Exception) -> ErrorCode:
+        msg = str(e).lower()
+
+        # SQLite-style messages
+        if "no such table" in msg:
+            return ErrorCode.PLAN_NO_SUCH_TABLE
+        if "no such column" in msg:
+            return ErrorCode.PLAN_NO_SUCH_COLUMN
+        if "syntax error" in msg:
+            return ErrorCode.PLAN_SYNTAX_ERROR
+
+        # Postgres-style messages (common cases)
+        if "relation" in msg and "does not exist" in msg:
+            return ErrorCode.PLAN_NO_SUCH_TABLE
+        if "column" in msg and "does not exist" in msg:
+            return ErrorCode.PLAN_NO_SUCH_COLUMN
+
+        return ErrorCode.PLAN_SYNTAX_ERROR
+
     def _fail(
         self,
         t0: float,
@@ -145,6 +172,7 @@ class Verifier:
         error: list[str],
         reason: str,
         exc_type: str | None = None,
+        error_code: ErrorCode | None = None,
     ) -> StageResult:
         dt = int(round((time.perf_counter() - t0) * 1000.0))
 
@@ -166,4 +194,6 @@ class Verifier:
             data={"verified": False},
             trace=trace,
             error=error,
+            error_code=error_code,
+            retryable=False,
         )
