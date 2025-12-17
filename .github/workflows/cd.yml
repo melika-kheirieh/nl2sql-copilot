@@ -99,7 +99,6 @@ jobs:
           rsync -av --delete nl2sql/ hf-space/nl2sql/
           rsync -av --delete demo/ hf-space/demo/
           rsync -av --delete scripts/ hf-space/scripts/
-
           rsync -av --delete requirements.txt hf-space/requirements.txt
           rsync -av --delete huggingface.yml hf-space/huggingface.yml
           rsync -av --delete config.py hf-space/config.py || true
@@ -122,7 +121,7 @@ jobs:
 
             git status
 
-            if git diff --quiet; then
+            if [ -z "$(git status --porcelain)" ]; then
               echo "No changes to sync to Hugging Face."
               exit 0
             fi
@@ -131,5 +130,5 @@ jobs:
             git config user.email "github-actions[bot]@users.noreply.github.com"
 
             git add .
-            git commit -m "Sync from GitHub main"
+            git commit -m "Sync from GitHub main  @ ${GITHUB_SHA}"
             git push origin main
