@@ -45,7 +45,7 @@ class SQLiteAdapter(DBAdapter):
             log.info("Query executed successfully. Returned %d rows.", len(rows))
             return rows, cols
 
-    def explain_query_plan(self, sql: str) -> None:
+    def explain_query_plan(self, sql: str) -> List[str]:
         if not self.path.exists():
             raise FileNotFoundError(f"SQLite DB does not exist: {self.path}")
 
@@ -60,4 +60,8 @@ class SQLiteAdapter(DBAdapter):
                 conn.execute("PRAGMA query_only = ON;")
             except Exception:
                 pass
-            conn.execute(f"EXPLAIN QUERY PLAN {sql_stripped}")
+            cur = conn.execute(f"EXPLAIN QUERY PLAN {sql_stripped}")
+            rows = cur.fetchall() or []
+            # Rows are typically (id, parent, notused, detail)
+            plan_lines: List[str] = [str(r[-1]) for r in rows if r]
+            return plan_lines
