@@ -134,7 +134,7 @@ Create a step-by-step plan to answer this question with SQL."""
             user_query: The user's natural language question
             schema_preview: Database schema information
             plan_text: Query execution plan
-            clarify_answers: Optional additional context
+            clarify_answers: Optional additional context_engineering
 
         Returns:
             Tuple of (sql, rationale, prompt_tokens, completion_tokens, cost)
@@ -183,7 +183,7 @@ Wrong: {{"sql": "SELECT COUNT(singer.singer_id) AS total_singers FROM singer", "
 Now generate the SQL for the given question:"""
 
         if clarify_answers:
-            user_prompt += f"\n\nAdditional context: {clarify_answers}"
+            user_prompt += f"\n\nAdditional context_engineering: {clarify_answers}"
 
         completion = self._create_chat_completion(
             model=self.model,
