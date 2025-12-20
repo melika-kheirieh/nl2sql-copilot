@@ -1,23 +1,43 @@
-# Ignore all data except demo.db
-data/*
-!data/demo.db
-
-# Python cache
-__pycache__
-*.pyc
-
-# Git
+# VCS
 .git
-.gitignore
+.github
 
-# Local environments
-venv/
-.env/
+# Secrets
+.env
 .env.*
 
-# Other files you don't want in Docker context
+# Python caches / test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Coverage artifacts
+.coverage
+coverage.xml
+htmlcov/
+
+# IDE
 .vscode/
 .idea/
+
+# Build outputs
 dist/
 build/
-coverage/
+*.egg-info/
+
+# Big / local-only data
+data/spider/
+data/uploads/
+data/tmp/
+
+# SQLite runtime side-files
+**/*.db-wal
+**/*.db-shm
+**/*.db-journal
+
+# Generated benchmark outputs
+benchmarks/results*/
+benchmarks/results_pro/
