@@ -106,6 +106,7 @@ jobs:
           rsync -av --delete Dockerfile hf-space/Dockerfile
           rsync -av --delete .dockerignore hf-space/.dockerignore || true
           rsync -av --delete README.md hf-space/README.md
+          rsync -av --delete start.py hf-space/start.py
 
       - name: 🧾 Ensure HF README front-matter exists
         run: |
