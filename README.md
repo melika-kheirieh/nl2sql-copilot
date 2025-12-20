@@ -1,260 +1,201 @@
----
-title: NL2SQL Copilot — Full Stack Demo
-emoji: 🧩
-colorFrom: indigo
-colorTo: blue
-sdk: docker
-pinned: false
----
-# NL2SQL Copilot
+# NL2SQL Copilot — Safety-First, Production-Grade Text-to-SQL
 
 [![CI](https://github.com/melika-kheirieh/nl2sql-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/melika-kheirieh/nl2sql-copilot/actions/workflows/ci.yml)
-![Docker](https://img.shields.io/badge/docker-ready-blue?logo=docker)
+[![Docker](https://img.shields.io/badge/docker-ready-blue?logo=docker)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A modular, production-oriented **Text-to-SQL Copilot** that converts natural-language queries into **safe, verified SQL**, runs them on a database (built-in or uploaded), and returns structured results with full traceability, repair loops, and observability.
+A **production-oriented Natural Language → SQL system** built around **explicit safety guarantees, verification, evaluation, and observability**.
 
-Built with **FastAPI**, **Pydantic-AI**, **SQLite**, **LRU caching**, and **Prometheus + Grafana** instrumentation.
-
----
-
-## 🔥 Features
-
-### **Agentic Multi-Stage Pipeline**
-- **Detector** — ambiguity check
-- **Planner** — reasoning plan
-- **Generator** — SQL + rationale
-- **Safety** — SELECT-only, forbidden pattern detection
-- **Executor** — runs SQL on uploaded or default DB
-- **Verifier** — validates output & schema compliance
-- **Repair Loop** — automatic self-correction if SQL fails
-- **LRU Cache** — fast responses on repeated queries
-
-### **Observability**
-- Stage-level timings
-- p95 latency
-- Safety / Verifier events
-- Error counters
-- Repair attempts
-- Exported via Prometheus → visualized in Grafana
-
-### **Flexible Database Input**
-- Use built-in sample SQLite DB (Chinook)
-- Upload your own `.db` file (auto-validated, TTL cleanup)
-
-### **Reproducible Benchmarks**
-- Evaluated on **Spider** (dev split)
-- Exact-Match, Structural-Match, ExecAcc, latency & failure breakdown
-- Plotting scripts included
+This project treats LLMs as **untrusted components** inside a constrained, measurable system — not as autonomous agents.
 
 ---
 
-## 🧩 Architecture (High-Level)
-
-<img src="docs/assets/architecture.png" width="750"/>
+## Demo (End-to-End)
+A live interactive demo is available on Hugging Face Spaces: 👉 [**Try the Demo**](https://huggingface.co/spaces/melikakheirieh/nl2sql-copilot)
+<p align="center">
+  <img src="docs/assets/screenshots/demo_list_albums_total_sales.png" width="700">
+</p>
 
 ---
 
-## 🚀 Demo
+## Why this exists
 
-A live interactive demo is available on Hugging Face Spaces:
+Most Text-to-SQL demos answer:
+> *“Can the model generate SQL?”*
 
-👉 https://huggingface.co/spaces/melikakheirieh/nl2sql-copilot
+This project answers a harder question:
+> **“Can NL→SQL be operated safely as a production system?”**
 
-### Example Query
-**Input:**
+That means:
+- controlling **what the model sees** (context engineering),
+- constraining **what it is allowed to execute** (safety),
+- verifying results before returning them,
+- and continuously measuring **accuracy, latency, and cost**.
+
+---
+
+## What the system does
+
+- Converts natural-language questions into **safe, verified SQL**
+- Enforces **SELECT-only execution policies** (no DDL / DML)
+- Uses **explicit context engineering** (schema packing + rules)
+- Applies **execution and verification guardrails**
+- Tracks **per-stage latency, errors, and cost signals**
+- Evaluates accuracy on **Spider** with a structured error taxonomy
+- Exposes **Prometheus metrics** and **Grafana dashboards**
+
+---
+
+## Architecture & Pipeline
+
+<p align="center">
+  <img src="docs/assets/architecture.png" width="720">
+</p>
+
 ```
 
-List all artists
+Detector
+→ Planner
+→ Generator
+→ Safety Guard
+→ Executor
+→ Verifier
+→ Repair (bounded)
 
 ````
 
-**Generated SQL:**
-```sql
-SELECT Name FROM Artist
+Each stage:
+- has a single responsibility,
+- emits structured traces,
+- is independently testable.
+
+---
+
+## Core design principles
+
+### 1) Context engineering over prompt cleverness
+The model never sees the raw database blindly.
+
+Instead, it receives:
+- a **deterministic schema pack**,
+- explicit constraints (e.g. SELECT-only, LIMIT rules),
+- and a bounded context budget.
+
+---
+
+### 2) Safety is enforced, not suggested
+Safety policies are **system-level constraints**, not prompt instructions.
+
+Current guarantees:
+- Single-statement execution
+- `SELECT` / `WITH` only
+- No DDL / DML
+- Execution time & result guards
+
+Violations are **blocked**, not repaired.
+
+---
+
+### 3) Verification before trust
+Queries are executed in a controlled environment and verified for:
+- structural validity,
+- schema consistency,
+- execution correctness.
+
+Errors are surfaced explicitly and classified — not hidden.
+
+---
+
+### 4) Repair for reliability, not illusion
+Repair exists to improve **system robustness**, not to chase accuracy at all costs.
+
+- Triggered only for eligible error classes
+- Disabled for safety violations
+- Strictly bounded (no infinite loops)
+
+---
+
+## Repository structure
+
+```text
+app/                 # FastAPI service (routes, schemas, wiring)
+nl2sql/              # Core NL→SQL pipeline
+adapters/            # Adapter implementations (DBs, LLMs)
+
+benchmarks/          # Evaluation runners & outputs
+tests/               # Unit & integration tests
+
+prometheus/          # Prometheus configuration
+grafana/             # Grafana provisioning
+alertmanager/        # Alertmanager config
+alert-receiver/      # Webhook receiver for alert testing
+
+infra/               # Docker Compose & infra glue
+configs/             # Runtime configs
+scripts/             # Tooling & helpers
+
+demo/                # Demo app
+ui/                  # UI surface
+docs/                # Docs & screenshots
+data/                # Local data & demo DBs
 ````
 
-**Result (truncated):**
+---
 
-```json
-{
-  "rows": [
-    ["AC/DC"],
-    ["Accept"],
-    ["Aerosmith"],
-    ["Alanis Morissette"]
-  ]
-}
-```
+## Observability & GenAIOps
+
+<p align="center">
+  <img src="docs/assets/grafana.png" width="720">
+</p>
+
+Tracked signals include:
+
+* End-to-end latency (p50 / p95)
+* Per-stage latency
+* Success / failure counts
+* Safety blocks
+* Repair attempts & win-rate
+* Cache hit / miss ratio
+* Token usage (prompt / completion)
+
+These metrics make **accuracy vs latency vs cost trade-offs** explicit.
 
 ---
 
-## 📡 API Usage
+## Evaluation
 
-### **POST /api/v1/nl2sql**
-
-Convert natural language into verified SQL and get query results.
+The system is evaluated on the **Spider benchmark**.
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/nl2sql" \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: dev-key" \
-  -d '{
-        "query": "Top 5 customers by total invoice amount",
-        "db_id": null
-      }'
+make eval-spider
 ```
 
-### Sample Response
+Metrics:
 
-```json
-{
-  "ambiguous": false,
-  "sql": "SELECT ...",
-  "rationale": "Explanation of why this SQL was generated.",
-  "result": { "rows": 5, "columns": [...], "rows_data": [...] },
-  "traces": [
-    {"stage": "detector", "duration_ms": 1},
-    {"stage": "planner",  "duration_ms": 8943},
-    {"stage": "generator","duration_ms": 1722},
-    {"stage": "safety",   "duration_ms": 2},
-    {"stage": "executor", "duration_ms": 1},
-    {"stage": "verifier", "duration_ms": 1},
-    {"stage": "repair",   "duration_ms": 522}
-  ]
-}
-```
+* Exact Match (EM)
+* Execution Accuracy (ExecAcc)
+* Semantic Match (SM)
+* Latency distributions
+* Error taxonomy breakdown
+
+A **golden regression set** is used to detect accuracy regressions.
 
 ---
 
-## 🧪 Benchmarks (Spider)
+## Roadmap
 
-Run evaluation:
-
-```bash
-export SPIDER_ROOT="$PWD/data/spider"
-
-PYTHONPATH=$PWD \
-  python benchmarks/evaluate_spider_pro.py --spider --split dev --limit 20 --debug
-```
-
-Plot results:
-
-```bash
-PYTHONPATH=$PWD \
-  python benchmarks/plot_results.py
-```
-
-Outputs:
-
-```
-benchmarks/results_pro/<timestamp>/
-    summary.json
-    eval.jsonl
-    metrics_overview.png
-    latency_histogram.png
-    latency_per_stage.png
-    errors_overview.png
-```
+* AST-based SQL allowlisting
+* Query cost heuristics (EXPLAIN-based)
+* Cross-database adapters
+* CI-level eval gating
 
 ---
 
-## 🏗️ Local Development
+## What this project is *not*
 
-### Install
+* Not a prompt-only demo
+* Not an autonomous agent playground
+* Not optimized for leaderboard chasing
 
-```bash
-make install
-```
-
-### Run FastAPI server
-
-```bash
-make api
-```
-
-### Run Gradio UI + API (combined)
-
-```bash
-python start.py
-```
-
-### Run tests
-
-```bash
-make test
-```
-
-### Lint + mypy
-
-```bash
-make lint
-make typecheck
-```
-
----
-
-## 📦 Docker
-
-Build:
-
-```bash
-docker build -t nl2sql-copilot .
-```
-
-Run:
-
-```bash
-docker run -p 8000:8000 nl2sql-copilot
-```
-
----
-
-## 📊 Observability (Prometheus + Grafana)
-
-Metrics available:
-
-* Stage timings
-* p95 latency
-* Repair attempts
-* Error counters
-* Cache hits/misses
-
-Sample Grafana view:
-
-<img src="docs/assets/grafana.png" width="750"/>
-
----
-
-## 🧬 Evolution (Prototype → Copilot)
-
-This project is the second-generation version of an earlier prototype:
-
-👉 [https://github.com/melika-kheirieh/nl2sql-copilot-prototype](https://github.com/melika-kheirieh/nl2sql-copilot-prototype)
-
-Improvements:
-
-* Multi-stage agentic pipeline
-* Safety + repair loop
-* Schema introspection
-* LRU cache
-* Observability
-* Benchmarks
-* Uploadable DB engine
-
----
-
-## 🗺️ Roadmap
-
-* Multi-turn disambiguation
-* Cross-DB schema adaptation
-* Lite mode (edge inference)
-* Streaming reasoning traces
-* Semantic caching (vector-based)
-* Distributed execution mode
-
----
-
-## 📄 License
-
-MIT — free for personal and commercial use.
+It is a **deliberately constrained, observable, and defendable AI system** —
+built to be discussed seriously in production engineering interviews.
