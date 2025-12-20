@@ -107,25 +107,25 @@ jobs:
 
       - name: 🧾 Ensure HF README front-matter exists
         run: |
-            # We assume GitHub README.md does NOT have HF front-matter.
-            # This step makes the HF Space README self-contained by injecting it if missing.
+          # We assume GitHub README.md does NOT have HF front-matter.
+          # This step makes the HF Space README self-contained by injecting it if missing.
+          if ! head -n 1 hf-space/README.md | grep -q '^---$'; then
+            tmpfile="$(mktemp)"
+            cat > "$tmpfile" <<'YAML'
+---
+title: NL2SQL Copilot — Full Stack Demo
+emoji: 🧩
+colorFrom: indigo
+colorTo: blue
+sdk: docker
+pinned: false
+---
 
-            if ! head -n 1 hf-space/README.md | grep -q '^---$'; then
-              tmpfile="$(mktemp)"
-
-              cat > "$tmpfile" <<'YAML'
-          ---
-          title: NL2SQL Copilot — Full Stack Demo
-          emoji: 🧩
-          colorFrom: indigo
-          colorTo: blue
-          sdk: docker
-          pinned: false
-          ---
-          YAML
-          cat hf-space/README.md >> "$tmpfile"
-          mv "$tmpfile" hf-space/README.md
+YAML
+            cat hf-space/README.md >> "$tmpfile"
+            mv "$tmpfile" hf-space/README.md
           fi
+
 
       - name: ✅ Commit & push to HF Space (with retry)
         uses: nick-fields/retry@v3
