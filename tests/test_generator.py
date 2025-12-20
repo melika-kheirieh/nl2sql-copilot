@@ -10,8 +10,8 @@ from nl2sql.errors.codes import ErrorCode
 
 class LLM_OK:
     def generate_sql(self, **kwargs):
-        # Contract: (sql, rationale, t_in, t_out, cost)
-        return "SELECT * FROM singer;", "list all", 10, 5, 0.00001
+        # Contract: (sql, rationale, used_tables, t_in, t_out, cost)
+        return "SELECT * FROM singer;", "list all", ["singer"], 10, 5, 0.00001
 
 
 class LLM_EMPTY_SQL:

@@ -276,6 +276,17 @@ class Pipeline:
         details: List[str] = []
         exec_result: Dict[str, Any] = {}
 
+        def _tag_last_trace_attempt(stage_name: str, attempt: int) -> None:
+            # Attach attempt metadata to the most recent trace entry for this stage.
+            for t in reversed(traces):
+                if t.get("stage") == stage_name:
+                    notes = t.get("notes") or {}
+                    if not isinstance(notes, dict):
+                        notes = {}
+                    notes["attempt"] = attempt
+                    t["notes"] = notes
+                    return
+
         def _fallback_trace(stage_name: str, dt_ms: float, ok: bool) -> None:
             traces.append(
                 self._mk_trace(
@@ -411,6 +422,33 @@ class Pipeline:
             sql = (r_gen.data or {}).get("sql")
             rationale = (r_gen.data or {}).get("rationale")
 
+            # --- schema drift signal (planner vs generator table usage)
+            planner_used_tables = (
+                (r_plan.data or {}).get("used_tables")
+                or (r_plan.data or {}).get("tables")
+                or []
+            )
+            generator_used_tables = (
+                (r_gen.data or {}).get("used_tables")
+                or (r_gen.data or {}).get("tables")
+                or []
+            )
+            planner_set = set(planner_used_tables)
+            generator_set = set(generator_used_tables)
+            schema_drift = bool(generator_set - planner_set)
+            traces.append(
+                self._mk_trace(
+                    stage="schema_drift_check",
+                    duration_ms=0.0,
+                    summary="compare planner vs generator table usage",
+                    notes={
+                        "planner_used_tables": sorted(planner_set),
+                        "generator_used_tables": sorted(generator_set),
+                        "schema_drift": schema_drift,
+                    },
+                )
+            )
+
             # Guard: empty SQL
             if not sql or not str(sql).strip():
                 pipeline_runs_total.labels(status="error").inc()
@@ -485,44 +523,39 @@ class Pipeline:
             if r_exec.ok and isinstance(r_exec.data, dict):
                 exec_result = dict(r_exec.data)
 
-            # --- 6) verifier (run with repair for consistency) ---
-            t0 = time.perf_counter()
-            r_ver = self._run_with_repair(
-                "verifier",
-                self._call_verifier,
-                repair_input_builder=self._sql_repair_input_builder,
-                max_attempts=1,
-                sql=sql,
-                exec_result=(r_exec.data or {}),
-                traces=traces,
-            )
-            dt = (time.perf_counter() - t0) * 1000.0
-            stage_duration_ms.labels("verifier").observe(dt)
+            # --- 6) verifier (only if execution succeeded) ---
+            r_ver = None
+            if r_exec.ok:
+                t0 = time.perf_counter()
+                r_ver = self._run_with_repair(
+                    "verifier",
+                    self._call_verifier,
+                    repair_input_builder=self._sql_repair_input_builder,
+                    max_attempts=1,
+                    sql=sql,
+                    exec_result=(r_exec.data or {}),
+                    traces=traces,
+                )
+                dt = (time.perf_counter() - t0) * 1000.0
+                stage_duration_ms.labels("verifier").observe(dt)
 
-            # Traces
-            traces.extend(self._trace_list(r_ver))
-            if not getattr(r_ver, "trace", None):
-                _fallback_trace("verifier", dt, r_ver.ok)
+                # Traces
 
-            # If verifier (or its repair) produced a new SQL, consume it
-            if r_ver.data and isinstance(r_ver.data, dict):
-                repaired_sql = r_ver.data.get("sql")
-                if repaired_sql:
-                    sql = repaired_sql
+                # If verifier (or its repair) produced a new SQL, consume it
+                if r_ver.data and isinstance(r_ver.data, dict):
+                    repaired_sql = r_ver.data.get("sql")
+                    if repaired_sql:
+                        sql = repaired_sql
+
+            data = r_ver.data if (r_ver and isinstance(r_ver.data, dict)) else {}
 
             # Verified flag
-            verified = (
-                bool(
-                    r_ver.data
-                    and isinstance(r_ver.data, dict)
-                    and r_ver.data.get("verified")
-                )
-                or r_ver.ok
-            )
+            verified = bool(data.get("verified") is True)
 
             # consume repaired SQL from verifier if any
-            if r_ver.data and "sql" in r_ver.data and r_ver.data["sql"]:
-                sql = r_ver.data["sql"]
+            repaired_sql = data.get("sql")
+            if repaired_sql:
+                sql = repaired_sql
 
             # --- 7) repair loop (if not verified) ---
             if not verified:
@@ -534,11 +567,12 @@ class Pipeline:
                         self.repair.run,
                         sql=sql,
                         error_msg="; ".join(details or ["unknown"]),
-                        schema_preview=schema_preview,
+                        schema_preview=schema_for_llm,
                     )
                     dt = (time.perf_counter() - t0) * 1000.0
                     stage_duration_ms.labels("repair").observe(dt)
                     traces.extend(self._trace_list(r_fix))
+                    _tag_last_trace_attempt("repair", _attempt)
                     if not getattr(r_fix, "trace", None):
                         _fallback_trace("repair", dt, r_fix.ok)
                     if not r_fix.ok:
@@ -553,6 +587,7 @@ class Pipeline:
                     dt2 = (time.perf_counter() - t0) * 1000.0
                     stage_duration_ms.labels("safety").observe(dt2)
                     traces.extend(self._trace_list(r_safe2))
+                    _tag_last_trace_attempt("safety", _attempt)
                     if not getattr(r_safe2, "trace", None):
                         _fallback_trace("safety", dt2, r_safe2.ok)
                     if not r_safe2.ok:
@@ -567,6 +602,7 @@ class Pipeline:
                     dt2 = (time.perf_counter() - t0) * 1000.0
                     stage_duration_ms.labels("executor").observe(dt2)
                     traces.extend(self._trace_list(r_exec2))
+                    _tag_last_trace_attempt("executor", _attempt)
                     if not getattr(r_exec2, "trace", None):
                         _fallback_trace("executor", dt2, r_exec2.ok)
                     if not r_exec2.ok:
@@ -586,11 +622,10 @@ class Pipeline:
                     dt2 = (time.perf_counter() - t0) * 1000.0
                     stage_duration_ms.labels("verifier").observe(dt2)
                     traces.extend(self._trace_list(r_ver2))
+                    _tag_last_trace_attempt("verifier", _attempt)
                     if not getattr(r_ver2, "trace", None):
                         _fallback_trace("verifier", dt2, r_ver2.ok)
-                    verified = (
-                        bool(r_ver2.data and r_ver2.data.get("verified")) or r_ver2.ok
-                    )
+                    verified = bool(r_ver2.data and r_ver2.data.get("verified") is True)
                     if r_ver2.data and "sql" in r_ver2.data and r_ver2.data["sql"]:
                         sql = r_ver2.data["sql"]
                     if verified:

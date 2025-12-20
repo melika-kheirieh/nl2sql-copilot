@@ -14,6 +14,7 @@ class ErrorCode(str, Enum):
     # --- Executor / DB ---
     DB_LOCKED = "DB_LOCKED"
     DB_TIMEOUT = "DB_TIMEOUT"
+    LLM_FAILURE = "LLM_FAILURE"
 
     # --- LLM ---
     LLM_TIMEOUT = "LLM_TIMEOUT"

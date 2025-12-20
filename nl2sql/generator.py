@@ -20,7 +20,9 @@ class Generator:
         user_query: str,
         schema_preview: str,
         plan_text: str,
+        constraints: Optional[list[str]] = None,
         clarify_answers: Optional[Dict[str, Any]] = None,
+        traces: Optional[list[dict]] = None,
     ) -> StageResult:
         t0 = time.perf_counter()
 
@@ -29,10 +31,11 @@ class Generator:
                 user_query=user_query,
                 schema_preview=schema_preview,
                 plan_text=plan_text,
+                constraints=constraints or [],
                 clarify_answers=clarify_answers or {},
             )
         except Exception as e:
-            # Provider/transport errors or unexpected runtime issues.
+            # Provider/transport errors or unexpected runtime exceptions.
             return StageResult(
                 ok=False,
                 error=[f"Generator failed: {e}"],
@@ -40,18 +43,22 @@ class Generator:
                 trace=None,
             )
 
-        # Contract: expect a 5-tuple (sql, rationale, token_in, token_out, cost_usd)
-        if not isinstance(res, tuple) or len(res) != 5:
+        if not isinstance(res, tuple) or len(res) not in (5, 6):
             return StageResult(
                 ok=False,
                 error=[
-                    "Generator contract violation: expected 5-tuple (sql, rationale, t_in, t_out, cost)"
+                    "Generator contract violation: expected 5/6-tuple (sql, rationale, [used_tables], t_in, t_out, cost)"
                 ],
                 error_code=ErrorCode.LLM_BAD_OUTPUT,
                 trace=None,
             )
 
-        sql, rationale, t_in, t_out, cost = res
+        used_tables: list[str] = []
+
+        if len(res) == 6:
+            sql, rationale, used_tables, t_in, t_out, cost = res
+        else:
+            sql, rationale, t_in, t_out, cost = res
 
         # Type/shape checks
         if not isinstance(sql, str) or not sql.strip():
@@ -73,18 +80,20 @@ class Generator:
 
         # Normalize rationale to a string
         rationale = rationale or ""
+
         trace = StageTrace(
             stage=self.name,
+            summary="Generated SQL",
             duration_ms=(time.perf_counter() - t0) * 1000.0,
             token_in=t_in,
             token_out=t_out,
             cost_usd=cost,
-            notes={"rationale_len": len(rationale)},
+            notes={"rationale_len": len(rationale), "used_tables": used_tables},
         )
 
         return StageResult(
             ok=True,
-            data={"sql": sql, "rationale": rationale},
+            data={"sql": sql, "rationale": rationale, "used_tables": used_tables},
             trace=trace,
             error_code=None,
             retryable=None,
