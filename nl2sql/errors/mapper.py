@@ -8,6 +8,7 @@ ERROR_MAP = {
     ErrorCode.PLAN_SYNTAX_ERROR: (422, False),
     ErrorCode.DB_LOCKED: (503, True),
     ErrorCode.DB_TIMEOUT: (503, True),
+    ErrorCode.EXECUTOR_COST_GUARDRAIL_BLOCKED: (422, False),
     ErrorCode.LLM_TIMEOUT: (503, True),
     ErrorCode.PIPELINE_CRASH: (500, False),
 }

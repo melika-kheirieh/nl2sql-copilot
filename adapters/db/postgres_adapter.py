@@ -69,7 +69,7 @@ class PostgresAdapter(DBAdapter):
                 cols: List[str] = [d[0] for d in desc if d]
                 return rows, cols
 
-    def explain_query_plan(self, sql: str) -> None:
+    def explain_query_plan(self, sql: str) -> List[str]:
         sql_stripped = (sql or "").strip().rstrip(";")
         if not sql_stripped.lower().startswith("select"):
             raise ValueError("Only SELECT statements are allowed.")
@@ -79,5 +79,7 @@ class PostgresAdapter(DBAdapter):
             with conn.cursor() as cur:
                 cur.execute("SET TRANSACTION READ ONLY;")
                 cur.execute(f"EXPLAIN {sql_stripped}")
-                # We don't need the output; if planning fails, it raises.
-                _ = cur.fetchall()
+                rows = cur.fetchall() or []
+                # psycopg returns rows like ("Seq Scan on ...",)
+                plan_lines: List[str] = [str(r[0]) for r in rows if r and len(r) >= 1]
+                return plan_lines
