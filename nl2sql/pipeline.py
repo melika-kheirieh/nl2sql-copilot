@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import traceback
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
@@ -16,6 +17,8 @@ from nl2sql.repair import Repair
 from nl2sql.stubs import NoOpExecutor, NoOpRepair, NoOpVerifier
 from nl2sql.metrics import stage_duration_ms, pipeline_runs_total, repair_attempts_total
 from nl2sql.errors.codes import ErrorCode
+from nl2sql.context_engineering.render import render_schema_pack
+from nl2sql.context_engineering.engineer import ContextEngineer
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,7 @@ class Pipeline:
         executor: Optional[Executor] = None,
         verifier: Optional[Verifier] = None,
         repair: Optional[Repair] = None,
+        context_engineer: ContextEngineer | None = None,
     ):
         self.detector = detector
         self.planner = planner
@@ -64,6 +68,7 @@ class Pipeline:
         self.repair = repair or NoOpRepair()
         # If the verifier explicitly requires verification, enforce it in finalize.
         self.require_verification = bool(getattr(self.verifier, "required", False))
+        self.context_engineer = context_engineer
 
     # ---------------------------- helpers ----------------------------
     @staticmethod
@@ -283,6 +288,13 @@ class Pipeline:
         schema_preview = schema_preview or ""
         clarify_answers = clarify_answers or {}
 
+        # --- Context Engineering
+        schema_for_llm = schema_preview
+
+        if self.context_engineer is not None:
+            packet = self.context_engineer.build(schema_preview=schema_preview)
+            schema_for_llm = render_schema_pack(packet.schema_pack)
+
         try:
             # --- 1) detector ---
             t0 = time.perf_counter()
@@ -314,14 +326,24 @@ class Pipeline:
 
             # --- 2) planner ---
             t0 = time.perf_counter()
+
+            planner_kwargs: Dict[str, Any] = {
+                "user_query": user_query,
+                "schema_preview": schema_for_llm,
+                "traces": traces,
+            }
+            try:
+                if "schema_pack" in inspect.signature(self.planner.run).parameters:
+                    planner_kwargs["schema_pack"] = schema_for_llm
+            except (TypeError, ValueError):
+                pass
+
             r_plan = self._run_with_repair(
                 "planner",
                 self.planner.run,
                 repair_input_builder=self._planner_repair_input_builder,
                 max_attempts=1,
-                user_query=user_query,
-                traces=traces,
-                schema_preview=schema_preview,
+                **planner_kwargs,
             )
             dt = (time.perf_counter() - t0) * 1000.0
             stage_duration_ms.labels("planner").observe(dt)
@@ -345,16 +367,26 @@ class Pipeline:
 
             # --- 3) generator ---
             t0 = time.perf_counter()
+
+            gen_kwargs: Dict[str, Any] = {
+                "user_query": user_query,
+                "schema_preview": schema_for_llm,
+                "plan_text": (r_plan.data or {}).get("plan"),
+                "clarify_answers": clarify_answers,
+                "traces": traces,
+            }
+            try:
+                if "schema_pack" in inspect.signature(self.generator.run).parameters:
+                    gen_kwargs["schema_pack"] = schema_for_llm
+            except (TypeError, ValueError):
+                pass
+
             r_gen = self._run_with_repair(
                 "generator",
                 self.generator.run,
                 repair_input_builder=self._generator_repair_input_builder,
                 max_attempts=1,
-                user_query=user_query,
-                schema_preview=schema_preview,
-                plan_text=(r_plan.data or {}).get("plan"),
-                clarify_answers=clarify_answers,
-                traces=traces,
+                **gen_kwargs,
             )
             dt = (time.perf_counter() - t0) * 1000.0
             stage_duration_ms.labels("generator").observe(dt)
@@ -447,7 +479,9 @@ class Pipeline:
             if not getattr(r_exec, "trace", None):
                 _fallback_trace("executor", dt, r_exec.ok)
             if not r_exec.ok and r_exec.error:
-                details.extend(r_exec.error)  # soft: keep for repair/verifier context
+                details.extend(
+                    r_exec.error
+                )  # soft: keep for repair/verifier context_engineering
             if r_exec.ok and isinstance(r_exec.data, dict):
                 exec_result = dict(r_exec.data)
 

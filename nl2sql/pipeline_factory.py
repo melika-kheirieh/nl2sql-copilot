@@ -29,6 +29,8 @@ from nl2sql.generator import Generator
 from nl2sql.executor import Executor
 from nl2sql.verifier import Verifier
 from nl2sql.repair import Repair
+from nl2sql.context_engineering.engineer import ContextEngineer
+from nl2sql.context_engineering.types import ContextBudget
 
 from adapters.db.base import DBAdapter
 from adapters.db.sqlite_adapter import SQLiteAdapter
@@ -195,6 +197,14 @@ def pipeline_from_config(path: str) -> Pipeline:
         verifier = VERIFIERS[cfg.get("verifier", "basic")]()
         repair = REPAIRS[cfg.get("repair", "default")](llm=llm)
 
+    context_engineer = ContextEngineer(
+        budget=ContextBudget(
+            max_tables=25,
+            max_columns_per_table=25,
+            max_total_columns=400,
+        )
+    )
+
     return Pipeline(
         detector=detector,
         planner=planner,
@@ -203,6 +213,7 @@ def pipeline_from_config(path: str) -> Pipeline:
         executor=executor,
         verifier=verifier,
         repair=repair,
+        context_engineer=context_engineer,
     )
 
 
