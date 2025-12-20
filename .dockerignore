@@ -41,3 +41,9 @@ data/tmp/
 # Generated benchmark outputs
 benchmarks/results*/
 benchmarks/results_pro/
+
+# temporary python files
+*_temp.py
+temp_*.py
+**/temp_*.py
+**/*_temp.py

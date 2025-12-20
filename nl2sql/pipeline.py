@@ -356,11 +356,6 @@ class Pipeline:
                 max_attempts=1,
                 **planner_kwargs,
             )
-            dt = (time.perf_counter() - t0) * 1000.0
-            stage_duration_ms.labels("planner").observe(dt)
-            traces.extend(self._trace_list(r_plan))
-            if not getattr(r_plan, "trace", None):
-                _fallback_trace("planner", dt, r_plan.ok)
             if not r_plan.ok:
                 pipeline_runs_total.labels(status="error").inc()
                 return FinalResult(
@@ -399,11 +394,6 @@ class Pipeline:
                 max_attempts=1,
                 **gen_kwargs,
             )
-            dt = (time.perf_counter() - t0) * 1000.0
-            stage_duration_ms.labels("generator").observe(dt)
-            traces.extend(self._trace_list(r_gen))
-            if not getattr(r_gen, "trace", None):
-                _fallback_trace("generator", dt, r_gen.ok)
             if not r_gen.ok:
                 pipeline_runs_total.labels(status="error").inc()
                 return FinalResult(
@@ -478,11 +468,6 @@ class Pipeline:
                 sql=sql,
                 traces=traces,
             )
-            dt = (time.perf_counter() - t0) * 1000.0
-            stage_duration_ms.labels("safety").observe(dt)
-            traces.extend(self._trace_list(r_safe))
-            if not getattr(r_safe, "trace", None):
-                _fallback_trace("safety", dt, r_safe.ok)
             if not r_safe.ok:
                 pipeline_runs_total.labels(status="error").inc()
                 return FinalResult(
@@ -511,11 +496,6 @@ class Pipeline:
                 sql=sql,
                 traces=traces,
             )
-            dt = (time.perf_counter() - t0) * 1000.0
-            stage_duration_ms.labels("executor").observe(dt)
-            traces.extend(self._trace_list(r_exec))
-            if not getattr(r_exec, "trace", None):
-                _fallback_trace("executor", dt, r_exec.ok)
             if not r_exec.ok and r_exec.error:
                 details.extend(
                     r_exec.error
@@ -536,10 +516,6 @@ class Pipeline:
                     exec_result=(r_exec.data or {}),
                     traces=traces,
                 )
-                dt = (time.perf_counter() - t0) * 1000.0
-                stage_duration_ms.labels("verifier").observe(dt)
-
-                # Traces
 
                 # If verifier (or its repair) produced a new SQL, consume it
                 if r_ver.data and isinstance(r_ver.data, dict):
