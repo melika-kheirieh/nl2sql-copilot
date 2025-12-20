@@ -121,4 +121,5 @@ def test_planner_falls_back_gracefully_on_trimming_error(monkeypatch):
     )
 
     assert result["plan"] == "PLAN(anything)"
+    assert result["used_tables"] == ["users"]
     assert "usage" in result

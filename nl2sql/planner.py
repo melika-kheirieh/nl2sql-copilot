@@ -6,6 +6,23 @@ from typing import Any, Dict, List, Tuple, Optional
 __all__ = ["Planner"]
 
 
+def _extract_table_names_from_schema(schema_text: str) -> List[str]:
+    """Best-effort table name extraction from schema preview."""
+    if not schema_text:
+        return []
+    names = re.findall(
+        r"(?im)^\s*create\s+table\s+`?([A-Za-z_][A-Za-z0-9_]*)`?\b", schema_text
+    )
+    # de-dup preserving order
+    seen: set[str] = set()
+    out: List[str] = []
+    for n in names:
+        if n not in seen:
+            out.append(n)
+            seen.add(n)
+    return out
+
+
 # --------- Heuristic schema trimming (safe, mypy-clean) ---------
 def _tokenize_lower(s: str) -> List[str]:
     return re.findall(r"[a-z_]+", (s or "").lower())
@@ -14,41 +31,33 @@ def _tokenize_lower(s: str) -> List[str]:
 def _table_blocks(schema_text: str) -> List[Tuple[str, List[str]]]:
     """
     Parse plain-text schema into [(table_name, lines)] blocks,
-    supporting both 'Table: name' and 'CREATE TABLE name (' styles.
+    assuming SQLite preview format like:
+      Table: users
+        - id
+        - name
     """
     blocks: List[Tuple[str, List[str]]] = []
     cur_name: Optional[str] = None
     cur_lines: List[str] = []
 
-    def _flush() -> None:
+    def _flush():
         nonlocal cur_name, cur_lines
-        if cur_name is not None and cur_lines:
-            blocks.append((cur_name, cur_lines[:]))
+        if cur_name is not None:
+            blocks.append((cur_name, cur_lines))
         cur_name, cur_lines = None, []
 
-    for line in (schema_text or "").splitlines():
-        m = re.search(r"Table:\s*(\w+)", line, flags=re.IGNORECASE)
-        m2 = re.search(r"CREATE\s+TABLE\s+(\w+)\s*\(", line, flags=re.IGNORECASE)
-
-        started = False
-        name: Optional[str] = None
-        if m is not None:
-            name = m.group(1)
-            started = True
-        elif m2 is not None:
-            name = m2.group(1)
-            started = True
-
-        if started and name:
+    for raw in (schema_text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        m = re.match(r"^table:\s*([a-zA-Z0-9_]+)\s*$", line, re.IGNORECASE)
+        if m:
             _flush()
-            cur_name = name
-            cur_lines.append(line)
+            cur_name = m.group(1)
+            cur_lines = [raw]
         else:
             if cur_name is not None:
-                cur_lines.append(line)
-
-        if cur_name is not None and line.strip().endswith(");"):
-            _flush()
+                cur_lines.append(raw)
 
     _flush()
     return blocks
@@ -64,29 +73,22 @@ def _pick_relevant_tables(schema_text: str, question: str, k: int = 3) -> str:
         q_toks = set(_tokenize_lower(question))
         scored: List[Tuple[int, str, List[str]]] = []
         for name, lines in blocks:
-            score = sum(1 for w in _tokenize_lower(name) if w in q_toks)
-            cols_line = " ".join(lines)
-            cols = re.findall(r"\b([A-Za-z_]\w*)\b", cols_line)
-            score += min(2, sum(1 for c in cols if c.lower() in q_toks))
+            score = sum(1 for tok in _tokenize_lower(" ".join(lines)) if tok in q_toks)
             scored.append((score, name, lines))
 
-        scored.sort(key=lambda t: t[0], reverse=True)
-        keep = [b for b in scored[: max(1, k)] if b[0] > 0]
-        if not keep:
-            keep = scored[: max(1, k)]
-
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        top = scored[:k]
+        # Keep stable order by original appearance? We'll keep by score then name for determinism.
         out_lines: List[str] = []
-        for _, _, lines in keep:
+        for _, _, lines in top:
             out_lines.extend(lines)
-            if lines and lines[-1].strip() != "":
-                out_lines.append("")
-        trimmed = "\n".join(out_lines).strip()
-        return trimmed if trimmed else schema_text
+            out_lines.append("")  # spacing
+
+        return "\n".join(out_lines).strip() if out_lines else schema_text
     except Exception:
         return schema_text
 
 
-# ------------------------------ Planner ------------------------------
 class Planner:
     """Planner wrapper around the LLM provider."""
 
@@ -95,26 +97,65 @@ class Planner:
         # ensure model_id is always a str (for mypy)
         self.model_id: str = str(model_id or getattr(llm, "model", "unknown"))
         # in-memory cache: (model, hash(q), hash(trimmed)) → (plan, pin, pout, cost)
-        self._plan_cache: dict[tuple[str, int, int], tuple[str, int, int, float]] = {}
+        self._plan_cache: dict[
+            tuple[str, int, int], tuple[str, List[str], int, int, float]
+        ] = {}
 
-    def run(self, *, user_query: str, schema_preview: str) -> Dict[str, Any]:
-        trimmed = _pick_relevant_tables(schema_preview or "", user_query or "", k=3)
+    def run(
+        self,
+        *,
+        user_query: str,
+        schema_preview: str,
+        constraints: Optional[List[str]] = None,
+        traces: Optional[List[dict]] = None,
+    ) -> Dict[str, Any]:
+        """Plan the query. Assumes schema_preview is already budgeted upstream."""
+        schema_preview = schema_preview or ""
+        constraints = constraints or []
 
         key: tuple[str, int, int] = (
             self.model_id,
             hash(user_query or ""),
-            hash(trimmed),
+            hash(schema_preview),
         )
+
         if key in self._plan_cache:
-            plan_text, pin, pout, cost = self._plan_cache[key]
+            plan_text, used_tables, pin, pout, cost = self._plan_cache[key]
         else:
-            plan_text, pin, pout, cost = self.llm.plan(
-                user_query=user_query, schema_preview=trimmed
-            )
-            self._plan_cache[key] = (plan_text, pin, pout, cost)
+            # Call provider with backward-compatible kwargs
+            try:
+                res = self.llm.plan(
+                    user_query=user_query,
+                    schema_preview=schema_preview,
+                    constraints=constraints,
+                )
+            except TypeError:
+                # Older fakes/providers may not accept `constraints`
+                res = self.llm.plan(
+                    user_query=user_query,
+                    schema_preview=schema_preview,
+                )
+
+            if not isinstance(res, tuple):
+                raise TypeError("LLM plan() must return a tuple")
+
+            if len(res) == 5:
+                plan_text, used_tables, pin, pout, cost = res
+            elif len(res) == 4:
+                plan_text, pin, pout, cost = res
+                used_tables = _extract_table_names_from_schema(schema_preview)
+            else:
+                raise TypeError("LLM plan() must return 4- or 5-tuple")
+
+            # Ensure used_tables is always a list[str]
+            if not isinstance(used_tables, list):
+                used_tables = _extract_table_names_from_schema(schema_preview)
+
+            self._plan_cache[key] = (plan_text, used_tables, pin, pout, cost)
 
         return {
             "plan": plan_text,
+            "used_tables": used_tables,
             "usage": {
                 "prompt_tokens": pin,
                 "completion_tokens": pout,
