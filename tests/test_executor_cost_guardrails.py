@@ -42,3 +42,13 @@ def test_executor_allows_scan_with_limit():
 
     assert res.ok is True
     assert db.executed is True
+
+
+def test_executor_allows_full_scan_without_limit_when_not_select_star():
+    db = FakeDB(plan_lines=["SCAN singer"])
+    ex = Executor(db=db)
+
+    res = ex.run(sql="SELECT id FROM singer")
+
+    assert res.ok is True
+    assert db.executed is True
