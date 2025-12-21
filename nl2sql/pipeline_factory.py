@@ -77,6 +77,16 @@ def _make_metrics() -> Metrics:
     return PrometheusMetrics()
 
 
+def _default_context_engineer() -> ContextEngineer:
+    return ContextEngineer(
+        budget=ContextBudget(
+            max_tables=25,
+            max_columns_per_table=25,
+            max_total_columns=400,
+        )
+    )
+
+
 def _tr(
     stage: str,
     *,
@@ -207,14 +217,6 @@ def pipeline_from_config(path: str) -> Pipeline:
         verifier = VERIFIERS[cfg.get("verifier", "basic")]()
         repair = REPAIRS[cfg.get("repair", "default")](llm=llm)
 
-    context_engineer = ContextEngineer(
-        budget=ContextBudget(
-            max_tables=25,
-            max_columns_per_table=25,
-            max_total_columns=400,
-        )
-    )
-
     return Pipeline(
         detector=detector,
         planner=planner,
@@ -223,7 +225,7 @@ def pipeline_from_config(path: str) -> Pipeline:
         executor=executor,
         verifier=verifier,
         repair=repair,
-        context_engineer=context_engineer,
+        context_engineer=_default_context_engineer(),
         metrics=_make_metrics(),
     )
 
@@ -338,5 +340,6 @@ def pipeline_from_config_with_adapter(path: str, *, adapter: DBAdapter) -> Pipel
         executor=executor,
         verifier=verifier,
         repair=repair,
+        context_engineer=_default_context_engineer(),
         metrics=_make_metrics(),
     )

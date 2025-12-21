@@ -9,6 +9,8 @@ from nl2sql.pipeline import FinalResult
 from nl2sql.pipeline_factory import pipeline_from_config_with_adapter
 from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.db.postgres_adapter import PostgresAdapter
+from adapters.metrics.prometheus import PrometheusMetrics
+
 from app import state
 from app.settings import Settings
 from app.errors import (
@@ -65,7 +67,6 @@ class NL2SQLService:
         This is a straight port of the previous sqlite3 logic, but contained
         inside the service instead of the router.
         """
-        # Try to locate the underlying .db path from the adapter
         db_path = getattr(adapter, "db_path", None) or getattr(adapter, "path", None)
         if not db_path:
             raise RuntimeError(
@@ -105,8 +106,7 @@ class NL2SQLService:
 
         - If override is provided by the client → use it.
         - Else, in sqlite mode → introspect the DB.
-        - In postgres mode without override → fail fast, the caller can map
-          this to a proper HTTP error.
+        - In postgres mode without override → fail fast.
         """
         if override:
             return override
@@ -151,6 +151,13 @@ class NL2SQLService:
             raise PipelineConfigError(
                 f"Failed to build pipeline from {self.settings.pipeline_config_path!r}: {exc}"
             ) from exc
+
+        # Force PrometheusMetrics to avoid silent NoOp wiring via factory defaults.
+        if (
+            getattr(pipeline, "metrics", None) is None
+            or pipeline.metrics.__class__.__name__ == "NoOpMetrics"
+        ):
+            pipeline.metrics = PrometheusMetrics()
 
         try:
             result = pipeline.run(user_query=query, schema_preview=schema_preview)

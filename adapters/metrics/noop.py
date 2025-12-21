@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from adapters.metrics.base import Metrics, RepairOutcome
+from adapters.metrics.base import Metrics, PipelineStatus, RepairOutcome
 
 
 class NoOpMetrics(Metrics):
     def observe_stage_duration_ms(self, *, stage: str, dt_ms: float) -> None:
         return
 
-    def inc_pipeline_run(self, *, status: str) -> None:
+    def inc_pipeline_run(self, *, status: PipelineStatus) -> None:
         return
 
     def inc_stage_call(self, *, stage: str, ok: bool) -> None:

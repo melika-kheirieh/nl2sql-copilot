@@ -36,7 +36,6 @@ class FinalResult:
     traces: List[dict]
 
     error_code: Optional[ErrorCode] = None
-
     result: Optional[Dict[str, Any]] = None
 
 
@@ -125,9 +124,35 @@ class Pipeline:
         return norm
 
     @staticmethod
+    def _accepts_kwargs(fn) -> bool:
+        try:
+            sig = inspect.signature(fn)
+        except (TypeError, ValueError):
+            return True
+        return any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+
+    @staticmethod
+    def _filter_kwargs(fn, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Make stage calls backward-compatible with older stubs/fakes that don't accept
+        extra kwargs like `traces`, `schema_preview`, etc.
+        """
+        if Pipeline._accepts_kwargs(fn):
+            return kwargs
+        try:
+            sig = inspect.signature(fn)
+            allowed = set(sig.parameters.keys())
+            return {k: v for k, v in kwargs.items() if k in allowed}
+        except (TypeError, ValueError):
+            return kwargs
+
+    @staticmethod
     def _safe_stage(fn, **kwargs) -> StageResult:
         try:
-            r = fn(**kwargs)
+            call_kwargs = Pipeline._filter_kwargs(fn, kwargs)
+            r = fn(**call_kwargs)
             if isinstance(r, StageResult):
                 return r
             return StageResult(ok=True, data=r, trace=None)
@@ -154,12 +179,10 @@ class Pipeline:
         return any(p in m for p in patterns)
 
     def _should_repair(self, stage_name: str, r: StageResult) -> tuple[bool, str]:
-        """Return (eligible, reason)."""
-        # Never repair safety blocks: policy violations must not be 'fixed' via LLM.
+        # Never repair safety blocks
         if stage_name == "safety":
             return (False, "blocked_by_safety")
 
-        # Never repair cost guardrail blocks: require user constraint (LIMIT) / query refinement.
         if (
             stage_name == "executor"
             and getattr(r, "error_code", None)
@@ -167,15 +190,13 @@ class Pipeline:
         ):
             return (False, "blocked_by_cost")
 
-        # Only repair SQL-related stages.
         if stage_name not in self.SQL_REPAIR_STAGES:
             return (False, "not_sql_stage")
 
-        # Verifier may return ok=True but verified=False (semantic mismatch). Allow a single repair attempt.
         if stage_name == "verifier":
             data = r.data if isinstance(r.data, dict) else {}
-            if data.get("verified") is False:
-                return (True, "not_verified")
+            if data.get("verified") is False or (r.ok is False):
+                return (True, "semantic_failure")
 
         errs = r.error or []
         if any(isinstance(e, str) and self._is_repairable_sql_error(e) for e in errs):
@@ -190,14 +211,18 @@ class Pipeline:
         *,
         repair_input_builder,
         max_attempts: int = 1,
-        traces: list,
         **kwargs,
     ) -> StageResult:
         """
         Run a stage with per-stage repair + full observability integration.
         SQL-only repair occurs for safety/executor/verifier.
-        Planner/Generator get log-only repair (trace only, no effect).
+
+        IMPORTANT: `traces` must be provided in kwargs as a list.
         """
+        traces = kwargs.get("traces")
+        if traces is None or not isinstance(traces, list):
+            raise TypeError("_run_with_repair requires `traces` (list) in kwargs")
+
         attempt = 0
 
         while True:
@@ -228,13 +253,32 @@ class Pipeline:
                     }
                 )
 
-            if r.ok:
+            # --- 1.5) Verifier semantic failure is repairable even if ok=True ---
+            if r.ok and stage_name == "verifier":
+                data0 = r.data if isinstance(r.data, dict) else {}
+                if data0.get("verified") is True:
+                    return r
+                # ok=True but verified=False → treat as eligible for repair path
+                eligible, reason = self._should_repair(stage_name, r)
+                if not eligible:
+                    self.metrics.inc_repair_attempt(stage=stage_name, outcome="skipped")
+                    if traces and isinstance(traces[-1], dict):
+                        notes = traces[-1].get("notes") or {}
+                        if not isinstance(notes, dict):
+                            notes = {}
+                        notes["repair_eligible"] = False
+                        notes["repair_skip_reason"] = reason
+                        traces[-1]["notes"] = notes
+                    return r
+                # fallthrough into repair branch below
+
+            elif r.ok:
                 return r
 
             # stage failed → check repair availability
             eligible, reason = self._should_repair(stage_name, r)
             if not eligible:
-                self.metrics.inc_repair_attempt(stage="verifier", outcome="skipped")
+                self.metrics.inc_repair_attempt(stage=stage_name, outcome="skipped")
                 # annotate latest stage trace entry
                 if traces and isinstance(traces[-1], dict):
                     notes = traces[-1].get("notes") or {}
@@ -254,7 +298,7 @@ class Pipeline:
 
             # --- 3) Run repair (always logged) ---
             self.metrics.inc_repair_trigger(stage=stage_name, reason=reason)
-            self.metrics.inc_repair_attempt(stage="verifier", outcome="attempt")
+            self.metrics.inc_repair_attempt(stage=stage_name, outcome="attempt")
             t1 = time.perf_counter()
             r_fix = self._safe_stage(self.repair.run, **repair_args)
             dt_fix = (time.perf_counter() - t1) * 1000.0
@@ -274,7 +318,7 @@ class Pipeline:
                 )
 
             if not r_fix.ok:
-                self.metrics.inc_repair_attempt(stage="verifier", outcome="failed")
+                self.metrics.inc_repair_attempt(stage=stage_name, outcome="failed")
                 return r  # repair itself failed → stop here
 
             # --- 4) Only inject SQL if the stage is an SQL-producing stage ---
@@ -282,16 +326,9 @@ class Pipeline:
                 if "sql" in repair_args and "sql" in kwargs:
                     kwargs["sql"] = (r_fix.data or {}).get("sql", kwargs["sql"])
 
-            # important: success metric must reflect if repair was applied meaningfully
-            if stage_name in self.SQL_REPAIR_STAGES:
-                self.metrics.inc_repair_attempt(stage="verifier", outcome="success")
-            else:
-                # log-only mode counts as a success-attempt but not semantic success
-                self.metrics.inc_repair_attempt(stage="verifier", outcome="success")
+            self.metrics.inc_repair_attempt(stage=stage_name, outcome="success")
 
-            # for SQL stages, we re-run the stage again with modified kwargs
-            # for log-only stages, this simply loops and stage is re-run unchanged
-            # (which is correct)
+            # re-run stage with updated kwargs
 
     @staticmethod
     def _planner_repair_input_builder(stage_result, kwargs):
@@ -395,6 +432,7 @@ class Pipeline:
             dt = (time.perf_counter() - t0) * 1000.0
             is_amb = bool(questions)
             self.metrics.observe_stage_duration_ms(stage="detector", dt_ms=dt)
+            self.metrics.inc_stage_call(stage="detector", ok=True)
             traces.append(
                 self._mk_trace(
                     stage="detector",
@@ -405,6 +443,7 @@ class Pipeline:
             )
             if questions:
                 self.metrics.inc_pipeline_run(status="ambiguous")
+                self.metrics.inc_stage_call(stage="detector", ok=False)
                 return FinalResult(
                     ok=True,
                     ambiguous=True,
@@ -418,8 +457,6 @@ class Pipeline:
                 )
 
             # --- 2) planner ---
-            t0 = time.perf_counter()
-
             planner_kwargs: Dict[str, Any] = {
                 "user_query": user_query,
                 "schema_preview": schema_for_llm,
@@ -454,14 +491,13 @@ class Pipeline:
                 )
 
             # --- 3) generator ---
-            t0 = time.perf_counter()
-
             gen_kwargs: Dict[str, Any] = {
                 "user_query": user_query,
                 "schema_preview": schema_for_llm,
                 "plan_text": (r_plan.data or {}).get("plan"),
                 "clarify_answers": clarify_answers,
                 "traces": traces,
+                "constraints": constraints,
             }
             try:
                 if "schema_pack" in inspect.signature(self.generator.run).parameters:
@@ -494,33 +530,6 @@ class Pipeline:
             sql = (r_gen.data or {}).get("sql")
             rationale = (r_gen.data or {}).get("rationale")
 
-            # --- schema drift signal (planner vs generator table usage)
-            planner_used_tables = (
-                (r_plan.data or {}).get("used_tables")
-                or (r_plan.data or {}).get("tables")
-                or []
-            )
-            generator_used_tables = (
-                (r_gen.data or {}).get("used_tables")
-                or (r_gen.data or {}).get("tables")
-                or []
-            )
-            planner_set = set(planner_used_tables)
-            generator_set = set(generator_used_tables)
-            schema_drift = bool(generator_set - planner_set)
-            traces.append(
-                self._mk_trace(
-                    stage="schema_drift_check",
-                    duration_ms=0.0,
-                    summary="compare planner vs generator table usage",
-                    notes={
-                        "planner_used_tables": sorted(planner_set),
-                        "generator_used_tables": sorted(generator_set),
-                        "schema_drift": schema_drift,
-                    },
-                )
-            )
-
             # Guard: empty SQL
             if not sql or not str(sql).strip():
                 self.metrics.inc_pipeline_run(status="error")
@@ -541,13 +550,13 @@ class Pipeline:
                 )
 
             # --- 4) safety ---
-            t0 = time.perf_counter()
             r_safe = self._run_with_repair(
                 "safety",
                 self.safety.run,
                 repair_input_builder=self._sql_repair_input_builder,
                 max_attempts=1,
                 sql=sql,
+                schema_preview=schema_for_llm,
                 traces=traces,
             )
             if not r_safe.ok:
@@ -569,201 +578,49 @@ class Pipeline:
             sql = (r_safe.data or {}).get("sql", sql)
 
             # --- 5) executor ---
-            t0 = time.perf_counter()
             r_exec = self._run_with_repair(
                 "executor",
                 self.executor.run,
                 repair_input_builder=self._sql_repair_input_builder,
                 max_attempts=1,
                 sql=sql,
+                schema_preview=schema_for_llm,
                 traces=traces,
             )
             if not r_exec.ok and r_exec.error:
-                details.extend(
-                    r_exec.error
-                )  # soft: keep for repair/verifier context_engineering
+                details.extend(r_exec.error)
             if r_exec.ok and isinstance(r_exec.data, dict):
                 exec_result = dict(r_exec.data)
 
             # --- 6) verifier (only if execution succeeded) ---
-            r_ver: StageResult | None = None
-            verifier_failed = False
             verified = False
-
             if r_exec.ok:
-                t0 = time.perf_counter()
-                r_ver = self._safe_stage(
+                r_ver = self._run_with_repair(
+                    "verifier",
                     self._call_verifier,
+                    repair_input_builder=self._sql_repair_input_builder,
+                    max_attempts=1,
                     sql=sql,
                     exec_result=(r_exec.data or {}),
+                    schema_preview=schema_for_llm,
                     traces=traces,
                 )
-                dt = (time.perf_counter() - t0) * 1000.0
-                self.metrics.observe_stage_duration_ms(stage="verifier", dt_ms=dt)
-
-                # Attach a trace entry if verifier didn't provide one
-                if getattr(r_ver, "trace", None):
-                    traces.append(r_ver.trace.__dict__)
-                else:
-                    traces.append(
-                        {
-                            "stage": "verifier",
-                            "duration_ms": dt,
-                            "summary": "ok" if r_ver.ok else "failed",
-                            "notes": {},
-                        }
-                    )
-
-                verifier_failed = not bool(r_ver.ok)
-                data0 = (
-                    r_ver.data if (r_ver.ok and isinstance(r_ver.data, dict)) else {}
-                )
-                verified = bool(data0.get("verified") is True)
-
-            # --- 7) semantic repair gating (verifier fail OR not_verified) ---
-            # If verifier failed or said "not verified", attempt a single repair and then:
-            # safety → executor → verifier again.
-            if r_exec.ok and (verifier_failed or not verified):
-                eligible, _reason = self._should_repair(
-                    "verifier",
-                    StageResult(
-                        ok=True, data={"verified": False}, error=None, trace=None
-                    ),
-                )
-                if eligible:
-                    self.metrics.inc_repair_trigger(stage="verifier", reason=_reason)
-                    # Prefer the real verifier message if present (tests expect this).
-                    err_list = (r_ver.error if (r_ver and r_ver.error) else None) or []
-                    error_msg = (
-                        "; ".join([e for e in err_list if isinstance(e, str)])
-                        or "not_verified"
-                    )
-
-                    rep_kwargs_all: Dict[str, Any] = {
-                        "user_query": user_query,
-                        "schema_preview": schema_for_llm,
-                        "sql": sql,
-                        "error_msg": error_msg,
-                        "error_message": error_msg,
-                        "traces": traces,
-                        "constraints": constraints,
-                    }
-                    try:
-                        params = inspect.signature(self.repair.run).parameters
-                        rep_kwargs = {
-                            k: v for k, v in rep_kwargs_all.items() if k in params
-                        }
-                    except (TypeError, ValueError):
-                        rep_kwargs = {
-                            "sql": sql,
-                            "error_msg": error_msg,
-                            "schema_preview": schema_for_llm,
-                        }
-
-                    self.metrics.inc_repair_attempt(stage="verifier", outcome="attempt")
-                    r_rep = self.repair.run(**rep_kwargs)
-
-                    new_sql = (
-                        r_rep.data.get("sql")
-                        if (r_rep.ok and isinstance(r_rep.data, dict))
-                        else None
-                    )
-
-                    if new_sql and str(new_sql).strip():
-                        sql = str(new_sql)
-
-                        # Re-run safety → executor → verifier using the standard path.
-                        r_safe2 = self._run_with_repair(
-                            "safety",
-                            self.safety.run,
-                            repair_input_builder=self._sql_repair_input_builder,
-                            max_attempts=1,
-                            sql=sql,
-                            traces=traces,
-                        )
-                        if not r_safe2.ok:
-                            self.metrics.inc_pipeline_run(status="error")
-                            return FinalResult(
-                                ok=False,
-                                ambiguous=False,
-                                error=True,
-                                details=r_safe2.error,
-                                error_code=r_safe2.error_code,
-                                questions=None,
-                                sql=sql,
-                                rationale=rationale,
-                                verified=None,
-                                traces=self._normalize_traces(traces),
-                            )
-
-                        sql = (r_safe2.data or {}).get("sql", sql)
-
-                        r_exec2 = self._run_with_repair(
-                            "executor",
-                            self.executor.run,
-                            repair_input_builder=self._sql_repair_input_builder,
-                            max_attempts=1,
-                            sql=sql,
-                            traces=traces,
-                        )
-                        if r_exec2.ok and isinstance(r_exec2.data, dict):
-                            exec_result = dict(r_exec2.data)
-
-                        r_ver2 = self._run_with_repair(
-                            "verifier",
-                            self._call_verifier,
-                            repair_input_builder=self._sql_repair_input_builder,
-                            max_attempts=1,
-                            sql=sql,
-                            exec_result=(r_exec2.data or {}),
-                            traces=traces,
-                        )
-                        data2 = r_ver2.data if isinstance(r_ver2.data, dict) else {}
-                        verified = bool(data2.get("verified") is True)
-
-                        if verified:
-                            self.metrics.inc_repair_attempt(
-                                stage="verifier", outcome="success"
-                            )
-                        else:
-                            self.metrics.inc_repair_attempt(
-                                stage="verifier", outcome="failed"
-                            )
-                else:
-                    self.metrics.inc_repair_attempt(stage="verifier", outcome="skipped")
-
-            # --- 8) optional soft auto-verify (executor success, no details) --- (executor success, no details) ---
-            if (verified is None or not verified) and not details:
-                any_exec_ok = any(
-                    t.get("stage") == "executor"
-                    and (t.get("notes") or {}).get("row_count")
-                    for t in traces
-                )
-                if any_exec_ok:
-                    traces.append(
-                        self._mk_trace(
-                            stage="pipeline",
-                            duration_ms=0.0,
-                            summary="auto-verified",
-                            notes={"reason": "executor succeeded, verifier silent"},
-                        )
-                    )
-                    verified = True
+                data_v = r_ver.data if isinstance(r_ver.data, dict) else {}
+                verified = bool(data_v.get("verified") is True)
 
             # --- 9) finalize ---
             has_errors = bool(details)
             need_ver = bool(self.require_verification)
 
-            # base success condition
             final_ok_by_verifier = bool(verified)
-            base_ok = (
-                bool(sql) and not has_errors and (final_ok_by_verifier or not need_ver)
+            ok = (
+                bool(sql)
+                and (not has_errors)
+                and (final_ok_by_verifier or not need_ver)
             )
-            ok = base_ok
             err = (not ok) and has_errors
 
-            # align `verified` with baseline semantics:
-            # if verification is NOT required and pipeline is ok, report verified=True
+            # If verification is NOT required and pipeline is ok, report verified=True
             if not need_ver and ok and not final_ok_by_verifier:
                 verified_final = True
             else:
@@ -799,7 +656,6 @@ class Pipeline:
 
         except Exception:
             self.metrics.inc_pipeline_run(status="error")
-            # bubble up to make failures visible in tests and logs
             raise
 
         finally:
