@@ -15,7 +15,8 @@ from nl2sql.executor import Executor
 from nl2sql.verifier import Verifier
 from nl2sql.repair import Repair
 from nl2sql.stubs import NoOpExecutor, NoOpRepair, NoOpVerifier
-from nl2sql.metrics import stage_duration_ms, pipeline_runs_total, repair_attempts_total
+from adapters.metrics.base import Metrics
+from adapters.metrics.noop import NoOpMetrics
 from nl2sql.errors.codes import ErrorCode
 from nl2sql.context_engineering.render import render_schema_pack
 from nl2sql.context_engineering.engineer import ContextEngineer
@@ -58,6 +59,7 @@ class Pipeline:
         verifier: Optional[Verifier] = None,
         repair: Optional[Repair] = None,
         context_engineer: ContextEngineer | None = None,
+        metrics: Metrics | None = None,
     ):
         self.detector = detector
         self.planner = planner
@@ -69,6 +71,7 @@ class Pipeline:
         # If the verifier explicitly requires verification, enforce it in finalize.
         self.require_verification = bool(getattr(self.verifier, "required", False))
         self.context_engineer = context_engineer
+        self.metrics: Metrics = metrics or NoOpMetrics()
 
     # ---------------------------- helpers ----------------------------
     @staticmethod
@@ -203,7 +206,7 @@ class Pipeline:
             r = self._safe_stage(fn, **kwargs)
             dt = (time.perf_counter() - t0) * 1000.0
 
-            stage_duration_ms.labels(stage_name).observe(dt)
+            self.metrics.observe_stage_duration_ms(stage=stage_name, dt_ms=dt)
 
             # attach stage trace
             if getattr(r, "trace", None):
@@ -224,7 +227,7 @@ class Pipeline:
             # stage failed → check repair availability
             eligible, reason = self._should_repair(stage_name, r)
             if not eligible:
-                repair_attempts_total.labels(outcome="skipped").inc()
+                self.metrics.inc_repair_attempt(outcome="skipped")
                 # annotate latest stage trace entry
                 if traces and isinstance(traces[-1], dict):
                     notes = traces[-1].get("notes") or {}
@@ -243,12 +246,12 @@ class Pipeline:
             repair_args = repair_input_builder(r, kwargs)
 
             # --- 3) Run repair (always logged) ---
-            repair_attempts_total.labels(outcome="attempt").inc()
+            self.metrics.inc_repair_attempt(outcome="attempt")
             t1 = time.perf_counter()
             r_fix = self._safe_stage(self.repair.run, **repair_args)
             dt_fix = (time.perf_counter() - t1) * 1000.0
 
-            stage_duration_ms.labels("repair").observe(dt_fix)
+            self.metrics.observe_stage_duration_ms(stage="repair", dt_ms=dt_fix)
 
             if getattr(r_fix, "trace", None):
                 traces.append(r_fix.trace.__dict__)
@@ -263,7 +266,7 @@ class Pipeline:
                 )
 
             if not r_fix.ok:
-                repair_attempts_total.labels(outcome="failed").inc()
+                self.metrics.inc_repair_attempt(outcome="failed")
                 return r  # repair itself failed → stop here
 
             # --- 4) Only inject SQL if the stage is an SQL-producing stage ---
@@ -273,10 +276,10 @@ class Pipeline:
 
             # important: success metric must reflect if repair was applied meaningfully
             if stage_name in self.SQL_REPAIR_STAGES:
-                repair_attempts_total.labels(outcome="success").inc()
+                self.metrics.inc_repair_attempt(outcome="success")
             else:
                 # log-only mode counts as a success-attempt but not semantic success
-                repair_attempts_total.labels(outcome="success").inc()
+                self.metrics.inc_repair_attempt(outcome="success")
 
             # for SQL stages, we re-run the stage again with modified kwargs
             # for log-only stages, this simply loops and stage is re-run unchanged
@@ -383,7 +386,7 @@ class Pipeline:
             questions = self.detector.detect(user_query, schema_preview)
             dt = (time.perf_counter() - t0) * 1000.0
             is_amb = bool(questions)
-            stage_duration_ms.labels("detector").observe(dt)
+            self.metrics.observe_stage_duration_ms(stage="detector", dt_ms=dt)
             traces.append(
                 self._mk_trace(
                     stage="detector",
@@ -393,7 +396,7 @@ class Pipeline:
                 )
             )
             if questions:
-                pipeline_runs_total.labels(status="ambiguous").inc()
+                self.metrics.inc_pipeline_run(status="ambiguous")
                 return FinalResult(
                     ok=True,
                     ambiguous=True,
@@ -428,7 +431,7 @@ class Pipeline:
                 **planner_kwargs,
             )
             if not r_plan.ok:
-                pipeline_runs_total.labels(status="error").inc()
+                self.metrics.inc_pipeline_run(status="error")
                 return FinalResult(
                     ok=False,
                     ambiguous=False,
@@ -466,7 +469,7 @@ class Pipeline:
                 **gen_kwargs,
             )
             if not r_gen.ok:
-                pipeline_runs_total.labels(status="error").inc()
+                self.metrics.inc_pipeline_run(status="error")
                 return FinalResult(
                     ok=False,
                     ambiguous=False,
@@ -512,7 +515,7 @@ class Pipeline:
 
             # Guard: empty SQL
             if not sql or not str(sql).strip():
-                pipeline_runs_total.labels(status="error").inc()
+                self.metrics.inc_pipeline_run(status="error")
                 traces.append(
                     self._mk_trace("generator", 0.0, "failed", {"reason": "empty_sql"})
                 )
@@ -540,7 +543,7 @@ class Pipeline:
                 traces=traces,
             )
             if not r_safe.ok:
-                pipeline_runs_total.labels(status="error").inc()
+                self.metrics.inc_pipeline_run(status="error")
                 return FinalResult(
                     ok=False,
                     ambiguous=False,
@@ -588,7 +591,7 @@ class Pipeline:
                     traces=traces,
                 )
                 dt = (time.perf_counter() - t0) * 1000.0
-                stage_duration_ms.labels("verifier").observe(dt)
+                self.metrics.observe_stage_duration_ms(stage="verifier", dt_ms=dt)
 
                 # Attach a trace entry if verifier didn't provide one
                 if getattr(r_ver, "trace", None):
@@ -648,7 +651,7 @@ class Pipeline:
                             "schema_preview": schema_for_llm,
                         }
 
-                    repair_attempts_total.labels(outcome="attempt").inc()
+                    self.metrics.inc_repair_attempt(outcome="attempt")
                     r_rep = self.repair.run(**rep_kwargs)
 
                     new_sql = (
@@ -670,7 +673,7 @@ class Pipeline:
                             traces=traces,
                         )
                         if not r_safe2.ok:
-                            pipeline_runs_total.labels(status="error").inc()
+                            self.metrics.inc_pipeline_run(status="error")
                             return FinalResult(
                                 ok=False,
                                 ambiguous=False,
@@ -710,11 +713,11 @@ class Pipeline:
                         verified = bool(data2.get("verified") is True)
 
                         if verified:
-                            repair_attempts_total.labels(outcome="success").inc()
+                            self.metrics.inc_repair_attempt(outcome="success")
                         else:
-                            repair_attempts_total.labels(outcome="failed").inc()
+                            self.metrics.inc_repair_attempt(outcome="failed")
                 else:
-                    repair_attempts_total.labels(outcome="skipped").inc()
+                    self.metrics.inc_repair_attempt(outcome="skipped")
 
             # --- 8) optional soft auto-verify (executor success, no details) --- (executor success, no details) ---
             if (verified is None or not verified) and not details:
@@ -753,7 +756,7 @@ class Pipeline:
             else:
                 verified_final = bool(verified)
 
-            pipeline_runs_total.labels(status=("ok" if ok else "error")).inc()
+            self.metrics.inc_pipeline_run(status=("ok" if ok else "error"))
 
             traces.append(
                 self._mk_trace(
@@ -782,12 +785,12 @@ class Pipeline:
             )
 
         except Exception:
-            pipeline_runs_total.labels(status="error").inc()
+            self.metrics.inc_pipeline_run(status="error")
             # bubble up to make failures visible in tests and logs
             raise
 
         finally:
             # Always record total latency, even on early return/exception
-            stage_duration_ms.labels("pipeline_total").observe(
-                (time.perf_counter() - t_all0) * 1000.0
+            self.metrics.observe_stage_duration_ms(
+                stage="pipeline_total", dt_ms=(time.perf_counter() - t_all0) * 1000.0
             )

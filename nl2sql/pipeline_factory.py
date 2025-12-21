@@ -12,6 +12,9 @@ except Exception:
     pass
 
 from nl2sql.pipeline import Pipeline
+from adapters.metrics.base import Metrics
+from adapters.metrics.noop import NoOpMetrics
+from adapters.metrics.prometheus import PrometheusMetrics
 from nl2sql.registry import (
     DETECTORS,
     PLANNERS,
@@ -65,6 +68,13 @@ def _build_llm(llm_cfg: Optional[Dict[str, Any]] = None) -> Any:
 
 def _is_pytest() -> bool:
     return bool(os.getenv("PYTEST_CURRENT_TEST"))
+
+
+def _make_metrics() -> Metrics:
+    # Under pytest, keep metrics side-effect free.
+    if _is_pytest():
+        return NoOpMetrics()
+    return PrometheusMetrics()
 
 
 def _tr(
@@ -214,6 +224,7 @@ def pipeline_from_config(path: str) -> Pipeline:
         verifier=verifier,
         repair=repair,
         context_engineer=context_engineer,
+        metrics=_make_metrics(),
     )
 
 
@@ -327,4 +338,5 @@ def pipeline_from_config_with_adapter(path: str, *, adapter: DBAdapter) -> Pipel
         executor=executor,
         verifier=verifier,
         repair=repair,
+        metrics=_make_metrics(),
     )
