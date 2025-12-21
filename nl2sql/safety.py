@@ -8,7 +8,7 @@ import sqlglot
 from sqlglot import exp
 
 from nl2sql.types import StageResult, StageTrace
-from nl2sql.metrics import safety_blocks_total, safety_checks_total
+from adapters.metrics.prometheus import safety_blocks_total, safety_checks_total
 
 
 # ------------------------- Zero-width & basic regexes -------------------------

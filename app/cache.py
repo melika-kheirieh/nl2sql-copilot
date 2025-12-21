@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from nl2sql.metrics import cache_events_total
+from adapters.metrics.prometheus import cache_events_total
 
 
 class NL2SQLCache:
