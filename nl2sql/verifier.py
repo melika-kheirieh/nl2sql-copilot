@@ -5,7 +5,7 @@ import time
 from typing import Any, Dict
 
 from nl2sql.errors.codes import ErrorCode
-from nl2sql.metrics import verifier_checks_total, verifier_failures_total
+from adapters.metrics.prometheus import verifier_checks_total, verifier_failures_total
 from nl2sql.types import StageResult, StageTrace
 
 from adapters.db.base import DBAdapter
