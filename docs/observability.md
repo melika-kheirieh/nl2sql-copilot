@@ -15,7 +15,7 @@ This module adds full observability for the NL2SQL Copilot pipeline.
 
 ## ⚙️ Recording & Alerting Rules
 
-Defined in `prometheus/rules.yml`:
+Defined in `infra/prometheus/rules.yml`:
 
 - **`nl2sql:stage_p95_ms`** – 95th percentile latency per stage
 - **`nl2sql:pipeline_success_ratio`** – 5-minute success ratio

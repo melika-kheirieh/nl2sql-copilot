@@ -1,14 +1,14 @@
 services:
   nl2sql:
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
     image: nl2sql:dev
     container_name: nl2sql
     restart: unless-stopped
 
     env_file:
-      - .env
+      - ../.env
 
     environment:
 #      POSTGRES_DSN: dbname=demo user=postgres password=postgres host=postgres port=5432
