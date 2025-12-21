@@ -9,7 +9,7 @@ st.set_page_config(page_title="NL2SQL Benchmark Dashboard", layout="wide")
 st.title("📊 NL2SQL Copilot – Benchmark Dashboard")
 
 # 1. Load results
-result_files = list(Path("benchmarks/results").glob("*.jsonl"))
+result_files = list(Path("benchmarks/results").rglob("*.jsonl"))
 if not result_files:
     st.warning("No benchmark result files found in benchmarks/results/")
     st.stop()
