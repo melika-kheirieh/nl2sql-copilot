@@ -208,6 +208,13 @@ class Pipeline:
 
             self.metrics.observe_stage_duration_ms(stage=stage_name, dt_ms=dt)
 
+            self.metrics.inc_stage_call(stage=stage_name, ok=r.ok)
+            if not r.ok and getattr(r, "error_code", None) is not None:
+                self.metrics.inc_stage_error(
+                    stage=stage_name,
+                    error_code=str(r.error_code),
+                )
+
             # attach stage trace
             if getattr(r, "trace", None):
                 traces.append(r.trace.__dict__)
@@ -227,7 +234,7 @@ class Pipeline:
             # stage failed → check repair availability
             eligible, reason = self._should_repair(stage_name, r)
             if not eligible:
-                self.metrics.inc_repair_attempt(outcome="skipped")
+                self.metrics.inc_repair_attempt(stage="verifier", outcome="skipped")
                 # annotate latest stage trace entry
                 if traces and isinstance(traces[-1], dict):
                     notes = traces[-1].get("notes") or {}
@@ -246,7 +253,8 @@ class Pipeline:
             repair_args = repair_input_builder(r, kwargs)
 
             # --- 3) Run repair (always logged) ---
-            self.metrics.inc_repair_attempt(outcome="attempt")
+            self.metrics.inc_repair_trigger(stage=stage_name, reason=reason)
+            self.metrics.inc_repair_attempt(stage="verifier", outcome="attempt")
             t1 = time.perf_counter()
             r_fix = self._safe_stage(self.repair.run, **repair_args)
             dt_fix = (time.perf_counter() - t1) * 1000.0
@@ -266,7 +274,7 @@ class Pipeline:
                 )
 
             if not r_fix.ok:
-                self.metrics.inc_repair_attempt(outcome="failed")
+                self.metrics.inc_repair_attempt(stage="verifier", outcome="failed")
                 return r  # repair itself failed → stop here
 
             # --- 4) Only inject SQL if the stage is an SQL-producing stage ---
@@ -276,10 +284,10 @@ class Pipeline:
 
             # important: success metric must reflect if repair was applied meaningfully
             if stage_name in self.SQL_REPAIR_STAGES:
-                self.metrics.inc_repair_attempt(outcome="success")
+                self.metrics.inc_repair_attempt(stage="verifier", outcome="success")
             else:
                 # log-only mode counts as a success-attempt but not semantic success
-                self.metrics.inc_repair_attempt(outcome="success")
+                self.metrics.inc_repair_attempt(stage="verifier", outcome="success")
 
             # for SQL stages, we re-run the stage again with modified kwargs
             # for log-only stages, this simply loops and stage is re-run unchanged
@@ -623,6 +631,7 @@ class Pipeline:
                     ),
                 )
                 if eligible:
+                    self.metrics.inc_repair_trigger(stage="verifier", reason=_reason)
                     # Prefer the real verifier message if present (tests expect this).
                     err_list = (r_ver.error if (r_ver and r_ver.error) else None) or []
                     error_msg = (
@@ -651,7 +660,7 @@ class Pipeline:
                             "schema_preview": schema_for_llm,
                         }
 
-                    self.metrics.inc_repair_attempt(outcome="attempt")
+                    self.metrics.inc_repair_attempt(stage="verifier", outcome="attempt")
                     r_rep = self.repair.run(**rep_kwargs)
 
                     new_sql = (
@@ -713,11 +722,15 @@ class Pipeline:
                         verified = bool(data2.get("verified") is True)
 
                         if verified:
-                            self.metrics.inc_repair_attempt(outcome="success")
+                            self.metrics.inc_repair_attempt(
+                                stage="verifier", outcome="success"
+                            )
                         else:
-                            self.metrics.inc_repair_attempt(outcome="failed")
+                            self.metrics.inc_repair_attempt(
+                                stage="verifier", outcome="failed"
+                            )
                 else:
-                    self.metrics.inc_repair_attempt(outcome="skipped")
+                    self.metrics.inc_repair_attempt(stage="verifier", outcome="skipped")
 
             # --- 8) optional soft auto-verify (executor success, no details) --- (executor success, no details) ---
             if (verified is None or not verified) and not details:

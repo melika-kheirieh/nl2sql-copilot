@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from adapters.metrics.base import Metrics
+from adapters.metrics.base import Metrics, RepairOutcome
 
 
 class NoOpMetrics(Metrics):
@@ -10,5 +10,14 @@ class NoOpMetrics(Metrics):
     def inc_pipeline_run(self, *, status: str) -> None:
         return
 
-    def inc_repair_attempt(self, *, outcome: str) -> None:
+    def inc_stage_call(self, *, stage: str, ok: bool) -> None:
+        return
+
+    def inc_stage_error(self, *, stage: str, error_code: str) -> None:
+        return
+
+    def inc_repair_trigger(self, *, stage: str, reason: str) -> None:
+        return
+
+    def inc_repair_attempt(self, *, stage: str, outcome: RepairOutcome) -> None:
         return
