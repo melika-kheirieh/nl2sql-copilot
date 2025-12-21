@@ -125,12 +125,8 @@ adapters/            # Adapter implementations (DBs, LLMs)
 benchmarks/          # Evaluation runners & outputs
 tests/               # Unit & integration tests
 
-prometheus/          # Prometheus configuration
-grafana/             # Grafana provisioning
-alertmanager/        # Alertmanager config
-alert-receiver/      # Webhook receiver for alert testing
 
-infra/               # Docker Compose & infra glue
+infra/               # Docker Compose + observability stack (Prometheus/Grafana/Alertmanager)
 configs/             # Runtime configs
 scripts/             # Tooling & helpers
 

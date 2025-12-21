@@ -136,23 +136,25 @@ clean-all: clean ## Remove build artifacts and coverage
 	rm -rf dist build .coverage *.egg-info
 
 # ==============================================================
+INFRA_COMPOSE ?= infra/docker-compose.yml
+
 # Observability Stack
 # ==============================================================
 .PHONY: obs-up obs-down obs-logs prom-up prom-check smoke grafana-import
 
 prom-up: ## Bring up Prometheus + Grafana via Docker Compose
-	docker compose -f docker-compose.prom.yml up -d
+	docker compose -f $(INFRA_COMPOSE) up -d
 
 prom-check: ## Validate Prometheus configs (local or Docker fallback)
 	@if command -v promtool >/dev/null 2>&1; then \
 		echo "🔍 Running promtool locally..."; \
-		promtool check rules prometheus/rules.yml && promtool check config prometheus/prometheus.yml; \
+		promtool check rules infra/prometheus/rules.yml && promtool check config infra/prometheus/prometheus.yml; \
 	else \
 		echo "⚠️ promtool not found, running via Docker..."; \
-		docker run --rm -v $$(pwd)/prometheus:/etc/prometheus prom/prometheus \
-			promtool check rules /etc/prometheus/rules.yml && \
-		docker run --rm -v $$(pwd)/prometheus:/etc/prometheus prom/prometheus \
-			promtool check config /etc/prometheus/prometheus.yml; \
+		docker run --rm -v $$(pwd)/infra/prometheus:/etc/prometheus prom/prometheus \
+			promtool check rules /etc/infra/prometheus/rules.yml && \
+		docker run --rm -v $$(pwd)/infra/prometheus:/etc/prometheus prom/prometheus \
+			promtool check config /etc/infra/prometheus/prometheus.yml; \
 	fi
 
 smoke: ## Generate sample traffic and print key metrics snapshot
@@ -179,10 +181,10 @@ obs-up: ## Start observability stack and verify readiness
 	$(MAKE) grafana-import
 
 obs-down: ## Tear down the observability stack
-	docker compose -f docker-compose.prom.yml down
+	docker compose -f $(INFRA_COMPOSE) down
 
 obs-logs: ## Tail logs of both services
-	docker compose -f docker-compose.prom.yml logs -f
+	docker compose -f $(INFRA_COMPOSE) logs -f
 
 grafana-import: ## Import Grafana dashboard via HTTP API
 	@set -e; \
@@ -195,6 +197,6 @@ grafana-import: ## Import Grafana dashboard via HTTP API
 	echo "📦 Importing dashboard..."; \
 	curl -s -X POST http://admin:admin@localhost:3000/api/dashboards/db \
 		-H "Content-Type: application/json" \
-		-d "{\"dashboard\": $$(cat prometheus/grafana_dashboard.json), \"overwrite\": true, \"folderId\": 0}" \
+		-d "{\"dashboard\": $$(cat infra/prometheus/grafana_dashboard.json), \"overwrite\": true, \"folderId\": 0}" \
 		| jq -r '.status' || true; \
 	echo "🎉 Dashboard imported → http://localhost:3000/dashboards"
