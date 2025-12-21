@@ -64,6 +64,8 @@ benchmarks/results_pro/
 
 # temporary python files
 *_temp.py
+*_temp.*
 temp_*.py
+temp_*.*
 **/temp_*.py
 **/*_temp.py
