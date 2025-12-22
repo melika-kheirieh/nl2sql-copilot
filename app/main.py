@@ -159,3 +159,10 @@ async def legacy_catch_all(request: Request, path: str):
 
     # Redirect only legacy root-level endpoints
     return RedirectResponse(url=f"/api/v1/{path}", status_code=307)
+
+
+# ----------------------------------------------------------------------------
+#  Backward-compatible alias for uvicorn
+# ----------------------------------------------------------------------------
+app = application
+__all__ = ["application", "app"]
