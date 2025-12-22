@@ -87,7 +87,7 @@ def test_evaluate_spider_writes_outputs(temp_cwd, monkeypatch):
     _install_fake_router_module(monkeypatch)
 
     # 2) Import module under test
-    import benchmarks.evaluate_spider as mod
+    import benchmarks.eval_lite as mod
 
     # 3) Shrink dataset and redirect outputs
     monkeypatch.setattr(mod, "DATASET", ["q1", "q2"], raising=True)
@@ -144,7 +144,7 @@ def test_to_stage_list_normalizes_mixed_items(temp_cwd, monkeypatch):
     into a uniform [{stage, ms}, ...] structure.
     """
     _install_fake_router_module(monkeypatch)
-    import benchmarks.evaluate_spider as mod
+    import benchmarks.eval_lite as mod
 
     mixed = [
         {"stage": "planner", "duration_ms": 10},
@@ -166,7 +166,7 @@ def test_int_ms_returns_int(temp_cwd, monkeypatch):
     _int_ms should return an int when given a valid float start time.
     """
     _install_fake_router_module(monkeypatch)
-    import benchmarks.evaluate_spider as mod
+    import benchmarks.eval_lite as mod
 
     assert isinstance(mod._int_ms(0.0), int)
     assert isinstance(mod._int_ms(12.3), int)
