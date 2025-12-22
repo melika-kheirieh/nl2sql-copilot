@@ -1,55 +1,141 @@
+from __future__ import annotations
+
 import json
+from json import JSONDecodeError
+from pathlib import Path
+from typing import Any, Dict, Optional
+
 import pandas as pd
 import streamlit as st
-import plotly.express as px
-from pathlib import Path
 
-st.set_page_config(page_title="NL2SQL Benchmark Dashboard", layout="wide")
 
-st.title("📊 NL2SQL Copilot – Benchmark Dashboard")
+RESULTS_ROOT = Path("benchmarks") / "results"
 
-# 1. Load results
-result_files = list(Path("benchmarks/results").rglob("*.jsonl"))
-if not result_files:
-    st.warning("No benchmark result files found in benchmarks/results/")
-    st.stop()
 
-file = st.selectbox("Select benchmark file", result_files)
-rows = [json.loads(line) for line in open(file)]
-df = pd.DataFrame(rows)
+def list_result_files(root: Path) -> list[Path]:
+    return sorted(root.rglob("*.jsonl"))
 
-# 2. Summary metrics
-st.subheader("Aggregate Metrics")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total Queries", len(df))
-col2.metric("Execution Accuracy", f"{df['exec_acc'].mean() * 100:.1f}%")
-col3.metric("Safety Violations", f"{df['safe_fail'].mean() * 100:.1f}%")
-col4.metric("Average Latency (ms)", f"{df['latency_ms'].mean():.0f}")
 
-# 3. Latency Distribution
-st.subheader("Latency Distribution")
-fig1 = px.histogram(df, x="latency_ms", nbins=30, title="Latency Histogram")
-st.plotly_chart(fig1, use_container_width=True)
+def run_label(root: Path, p: Path) -> str:
+    """Human-friendly label for a run file."""
+    try:
+        return str(p.relative_to(root))
+    except Exception:
+        return str(p)
 
-# 4. Cost vs Accuracy
-st.subheader("Cost vs Execution Accuracy")
-fig2 = px.scatter(
-    df,
-    x="cost_usd",
-    y="exec_acc",
-    color="provider",
-    title="Trade-off: Cost vs Accuracy",
-    hover_data=["query"],
-)
-st.plotly_chart(fig2, use_container_width=True)
 
-# 5. Repair Stats
-if "repair_attempts" in df.columns:
-    st.subheader("Repair Attempts")
-    fig3 = px.bar(
-        df.groupby("repair_attempts").size().reset_index(name="count"),
-        x="repair_attempts",
-        y="count",
-        title="Number of Repair Attempts per Query",
+def read_jsonl(path: Path) -> tuple[list[dict[str, Any]], int]:
+    """Read JSONL into a list of dicts; returns (rows, bad_lines)."""
+    rows: list[dict[str, Any]] = []
+    bad = 0
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except JSONDecodeError:
+                bad += 1
+                continue
+            if isinstance(obj, dict):
+                rows.append(obj)
+    return rows, bad
+
+
+def metric_or_na(df: pd.DataFrame, col: str, fn) -> Optional[float]:
+    if col not in df.columns or df.empty:
+        return None
+    try:
+        s = pd.to_numeric(df[col], errors="coerce").dropna()
+        if s.empty:
+            return None
+        return float(fn(s))
+    except Exception:
+        return None
+
+
+def main() -> None:
+    st.set_page_config(page_title="Benchmark Dashboard", layout="wide")
+    st.title("Benchmark Dashboard")
+
+    if not RESULTS_ROOT.exists():
+        st.error(f"Results folder not found: {RESULTS_ROOT}")
+        st.stop()
+
+    result_files = list_result_files(RESULTS_ROOT)
+    if not result_files:
+        st.warning(f"No .jsonl files found under: {RESULTS_ROOT}")
+        st.info("Tip: generate results under benchmarks/results/<timestamp>/*.jsonl")
+        st.stop()
+
+    file_path = st.selectbox(
+        "Select benchmark run",
+        result_files,
+        format_func=lambda p: run_label(RESULTS_ROOT, p),
     )
-    st.plotly_chart(fig3, use_container_width=True)
+
+    rows, bad_lines = read_jsonl(file_path)
+    if bad_lines:
+        st.warning(f"Skipped {bad_lines} malformed JSON line(s).")
+
+    if not rows:
+        st.warning("Selected file contains no valid JSON objects.")
+        st.stop()
+
+    df = pd.DataFrame(rows)
+
+    with st.expander("Schema / columns", expanded=False):
+        st.write(sorted(df.columns.astype(str).tolist()))
+
+    required = {"latency_ms"}
+    missing = required - set(df.columns)
+    if missing:
+        st.error(f"Missing required column(s): {sorted(missing)}")
+        st.stop()
+
+    exec_acc = metric_or_na(df, "exec_acc", lambda s: s.mean())
+    safe_fail = metric_or_na(df, "safe_fail", lambda s: s.mean())
+    p50 = metric_or_na(df, "latency_ms", lambda s: s.quantile(0.50))
+    p95 = metric_or_na(df, "latency_ms", lambda s: s.quantile(0.95))
+    avg_cost = metric_or_na(df, "cost_usd", lambda s: s.mean())
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Rows", f"{len(df):,}")
+    c2.metric("Exec acc", "N/A" if exec_acc is None else f"{exec_acc:.3f}")
+    c3.metric("Safe fail", "N/A" if safe_fail is None else f"{safe_fail:.3f}")
+    c4.metric("Latency p50 (ms)", "N/A" if p50 is None else f"{p50:.1f}")
+    c5.metric("Latency p95 (ms)", "N/A" if p95 is None else f"{p95:.1f}")
+
+    if avg_cost is not None:
+        st.metric("Avg cost (USD)", f"{avg_cost:.6f}")
+
+    group_cols = [c for c in ["provider", "model"] if c in df.columns]
+    if group_cols:
+        st.subheader("Breakdown")
+        g = df.copy()
+        for col in ["latency_ms", "cost_usd", "exec_acc", "safe_fail"]:
+            if col in g.columns:
+                g[col] = pd.to_numeric(g[col], errors="coerce")
+
+        agg: Dict[str, Any] = {"latency_ms": ["count", "mean"]}
+        if "exec_acc" in g.columns:
+            agg["exec_acc"] = ["mean"]
+        if "safe_fail" in g.columns:
+            agg["safe_fail"] = ["mean"]
+        if "cost_usd" in g.columns:
+            agg["cost_usd"] = ["mean"]
+
+        out = g.groupby(group_cols).agg(agg)
+        out.columns = [
+            "_".join([a, b]).strip("_") for a, b in out.columns.to_flat_index()
+        ]
+        out = out.reset_index().sort_values(by="latency_ms_count", ascending=False)
+        st.dataframe(out, use_container_width=True)
+
+    st.subheader("Raw rows")
+    st.dataframe(df, use_container_width=True)
+
+
+if __name__ == "__main__":
+    main()
