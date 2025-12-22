@@ -153,9 +153,11 @@ async def legacy_nl2sql_redirect(request: Request):
     "/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 )
 async def legacy_catch_all(request: Request, path: str):
-    """Redirect old root-level endpoints to versioned API."""
-    if path.startswith("api/v1"):
-        return RedirectResponse(url=f"/{path}", status_code=307)
+    # If it's already versioned, don't redirect (prevents infinite 307 loop)
+    if request.url.path.startswith("/api/v1/") or request.url.path == "/api/v1":
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    # Redirect only legacy root-level endpoints
     return RedirectResponse(url=f"/api/v1/{path}", status_code=307)
 
 

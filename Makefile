@@ -1,135 +1,168 @@
 # ==============================================================
 # Makefile — NL2SQL Copilot
-# Practical, low-drift, but not underpowered
+# Practical, low-drift, but not underpowered.
 # ==============================================================
-
 SHELL := /bin/bash
+.ONESHELL:
+.SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
 # ---------- Config ----------
-VENV_DIR   ?= .venv
-PY         ?= $(if $(wildcard $(VENV_DIR)/bin/python),$(VENV_DIR)/bin/python,python3)
-PIP        ?= $(if $(wildcard $(VENV_DIR)/bin/pip),$(VENV_DIR)/bin/pip,pip)
-UVICORN    ?= $(if $(wildcard $(VENV_DIR)/bin/uvicorn),$(VENV_DIR)/bin/uvicorn,uvicorn)
-RUFF       ?= $(if $(wildcard $(VENV_DIR)/bin/ruff),$(VENV_DIR)/bin/ruff,ruff)
-MYPY       ?= $(if $(wildcard $(VENV_DIR)/bin/mypy),$(VENV_DIR)/bin/mypy,mypy)
-PYTEST     ?= $(if $(wildcard $(VENV_DIR)/bin/pytest),$(VENV_DIR)/bin/pytest,pytest)
+VENV_DIR ?= .venv
 
-HOST       ?= 0.0.0.0
-PORT       ?= 8000
+PY      ?= $(if $(wildcard $(VENV_DIR)/bin/python),$(VENV_DIR)/bin/python,python3)
+PIP     ?= $(if $(wildcard $(VENV_DIR)/bin/pip),$(VENV_DIR)/bin/pip,pip)
+UVICORN ?= $(if $(wildcard $(VENV_DIR)/bin/uvicorn),$(VENV_DIR)/bin/uvicorn,uvicorn)
+RUFF    ?= $(if $(wildcard $(VENV_DIR)/bin/ruff),$(VENV_DIR)/bin/ruff,ruff)
+MYPY    ?= $(if $(wildcard $(VENV_DIR)/bin/mypy),$(VENV_DIR)/bin/mypy,mypy)
+PYTEST  ?= $(if $(wildcard $(VENV_DIR)/bin/pytest),$(VENV_DIR)/bin/pytest,pytest)
 
-# Auto-pick app module (adjust if your app lives elsewhere)
-APP_MODULE ?= $(if $(wildcard main.py),main:app,app.main:app)
+APP_HOST ?= 127.0.0.1
+APP_PORT ?= 8000
 
-# Infra (Docker Compose)
 INFRA_COMPOSE ?= infra/docker-compose.yml
+PROM_CONFIG   ?= infra/prometheus/prometheus.yml
+PROM_RULES    ?= infra/prometheus/rules.yml
+
+# API key used by scripts/smoke_*. Default aligns with infra docker-compose env.
+API_KEY ?= dev-key
 
 # ---------- Help ----------
 .PHONY: help
 help: ## Show available targets
-	@awk 'BEGIN {FS = ":.*##"; printf "\nTargets:\n"} \
-	/^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-18s %s\n", $$1, $$2} \
-	END {printf "\n"}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "\033[36m%-24s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sort
 
-# ---------- Setup ----------
-.PHONY: venv install
-venv: ## Create virtualenv if missing
-	@test -d $(VENV_DIR) || python3 -m venv $(VENV_DIR)
+# ---------- Virtualenv / deps ----------
+.PHONY: venv
+venv: ## Create local venv at .venv
+	python3 -m venv $(VENV_DIR)
+	$(PY) -m pip install --upgrade pip
 
-install: ## Install Python dependencies
-	$(MAKE) venv
+.PHONY: install
+install: ## Install project dependencies into the venv
 	$(PIP) install -r requirements.txt
 
+.PHONY: install-dev
+install-dev: ## Install dev dependencies (if you have a requirements-dev.txt)
+	@if [[ -f requirements-dev.txt ]]; then \
+		$(PIP) install -r requirements-dev.txt; \
+	else \
+		echo "requirements-dev.txt not found; skipping."; \
+	fi
+
 # ---------- Quality ----------
-.PHONY: format fmt-check lint typecheck test test-all cov check
-format: ## Auto-format & fix (ruff)
+.PHONY: format
+format: ## Format code (ruff format)
 	$(RUFF) format .
+
+.PHONY: lint
+lint: ## Lint (ruff)
+	$(RUFF) check .
+
+.PHONY: lint-fix
+lint-fix: ## Lint and auto-fix (ruff --fix)
 	$(RUFF) check . --fix
 
-fmt-check: ## Check formatting only (CI-friendly)
-	$(RUFF) format . --check
-	$(RUFF) check .
-
-lint: ## Lint only (ruff)
-	$(RUFF) check .
-
+.PHONY: typecheck
 typecheck: ## Type-check (mypy)
 	$(MYPY) .
 
-test: ## Run fast test suite
+.PHONY: qa
+qa: format lint typecheck ## Run format + lint + typecheck
+
+# ---------- Tests ----------
+.PHONY: test
+test: ## Run unit tests
 	PYTHONPATH=$$PWD $(PYTEST) -q
 
-test-all: ## Run full test suite
+.PHONY: test-all
+test-all: ## Run full test suite (unit + extras)
 	PYTHONPATH=$$PWD $(PYTEST)
 
+.PHONY: cov
 cov: ## Coverage (requires pytest-cov)
 	PYTHONPATH=$$PWD $(PYTEST) --cov --cov-report=term-missing
 
-check: ## Unified quality gate: fmt-check + typecheck + tests
-	$(MAKE) fmt-check
-	$(MAKE) typecheck
-	$(MAKE) test
-
-# ---------- Run ----------
+# ---------- App (local) ----------
 .PHONY: run
-run: ## Run FastAPI backend (reload)
-	$(UVICORN) $(APP_MODULE) --reload --host $(HOST) --port $(PORT)
+run: ## Run API locally on $(APP_HOST):$(APP_PORT)
+	$(UVICORN) app.main:application --host $(APP_HOST) --port $(APP_PORT)
 
-# ---------- Benchmarks ----------
-.PHONY: bench-ui
-bench-ui: ## Run Streamlit benchmark dashboard
-	streamlit run benchmark_app.py
-
-# ---------- Infra / Observability ----------
-.PHONY: infra-up infra-down infra-restart infra-ps infra-logs infra-reset
-infra-up: ## Bring up infra stack (compose)
-	docker compose -f $(INFRA_COMPOSE) up -d --build
-
-infra-down: ## Tear down infra stack
-	docker compose -f $(INFRA_COMPOSE) down
-
-infra-restart: ## Restart infra stack
-	$(MAKE) infra-down
-	$(MAKE) infra-up
-
-infra-ps: ## Show infra stack status
-	docker compose -f $(INFRA_COMPOSE) ps
-
-infra-logs: ## Tail infra stack logs
-	docker compose -f $(INFRA_COMPOSE) logs -f
-
-infra-reset: ## Hard reset infra containers (useful when container_name conflicts happen)
-	@set -e; \
-	echo "Resetting infra stack..."; \
-	docker compose -f $(INFRA_COMPOSE) down --remove-orphans || true; \
-	docker rm -f nl2sql nl2sql-prom nl2sql-grafana nl2sql-alertmanager nl2sql-alert-receiver 2>/dev/null || true; \
-	echo "Done. Now run: make infra-up"
-
-# ---------- Smoke (system + metrics) ----------
-.PHONY: smoke
-smoke: ## Run system smoke test and validate Prometheus metrics
-	./scripts/smoke_metrics.sh
+.PHONY: run-reload
+run-reload: ## Run API locally with auto-reload
+	$(UVICORN) app.main:application --reload --host $(APP_HOST) --port $(APP_PORT)
 
 # ---------- Prometheus ----------
 .PHONY: prom-check
 prom-check: ## Validate Prometheus config/rules (local promtool or Docker fallback)
 	@if command -v promtool >/dev/null 2>&1; then \
 		echo "Running promtool locally..."; \
-		promtool check rules infra/prometheus/rules.yml && \
-		promtool check config infra/prometheus/prometheus.yml; \
+		echo "Checking $(PROM_RULES)"; \
+		promtool check rules $(PROM_RULES); \
+		echo; \
+		echo "Checking $(PROM_CONFIG)"; \
+		promtool check config $(PROM_CONFIG); \
 	else \
-		echo "promtool not found; running via Docker..."; \
-		docker run --rm -v $$(pwd)/infra/prometheus:/etc/prometheus prom/prometheus \
-			promtool check rules /etc/prometheus/rules.yml; \
-		docker run --rm -v $$(pwd)/infra/prometheus:/etc/prometheus prom/prometheus \
-			promtool check config /etc/prometheus/prometheus.yml; \
+		echo "promtool not found; using Docker image prom/prometheus for checks..."; \
+		docker run --rm -v "$$PWD:/work" -w /work prom/prometheus:latest \
+			promtool check rules $(PROM_RULES); \
+		docker run --rm -v "$$PWD:/work" -w /work prom/prometheus:latest \
+			promtool check config $(PROM_CONFIG); \
 	fi
 
-# ---------- Cleanup ----------
-.PHONY: clean clean-all
-clean: ## Remove Python cache/build artifacts
-	rm -rf .pytest_cache .mypy_cache .ruff_cache **/__pycache__ .coverage
+# ---------- Infra (Docker Compose) ----------
+.PHONY: infra-up
+infra-up: ## Start infra stack (Prometheus/Grafana/Alertmanager + nl2sql)
+	docker compose -f $(INFRA_COMPOSE) up -d --build
 
-clean-all: ## Clean + remove venv
-	$(MAKE) clean
-	rm -rf $(VENV_DIR)
+.PHONY: infra-down
+infra-down: ## Stop infra stack
+	docker compose -f $(INFRA_COMPOSE) down
+
+.PHONY: infra-restart
+infra-restart: ## Restart infra stack
+	docker compose -f $(INFRA_COMPOSE) down
+	docker compose -f $(INFRA_COMPOSE) up -d --build
+
+.PHONY: infra-ps
+infra-ps: ## Show running containers for the infra stack
+	docker compose -f $(INFRA_COMPOSE) ps
+
+.PHONY: infra-logs
+infra-logs: ## Tail infra logs
+	docker compose -f $(INFRA_COMPOSE) logs -f --tail=200
+
+# ---------- Smoke (system + metrics) ----------
+.PHONY: smoke
+smoke: ## Run smoke tests (system + Prometheus metrics validation)
+	API_KEY="$(API_KEY)" ./scripts/smoke_metrics.sh
+
+.PHONY: demo
+demo: ## Full demo: prom-check -> infra-up -> smoke
+	$(MAKE) prom-check
+	$(MAKE) infra-up
+	$(MAKE) smoke
+	@echo
+	@echo "Done."
+	@echo "API:        http://$(APP_HOST):$(APP_PORT)/docs"
+	@echo "Prometheus: http://$(APP_HOST):9090"
+	@echo "Grafana:    http://$(APP_HOST):3000"
+
+# ---------- Cleanup ----------
+.PHONY: clean
+clean: ## Remove python cache artifacts
+	rm -rf .pytest_cache .mypy_cache .ruff_cache
+	find . -type d -name "__pycache__" -print0 | xargs -0 rm -rf
+
+.PHONY: clean-docker
+clean-docker: ## Stop infra and remove volumes (careful)
+	docker compose -f $(INFRA_COMPOSE) down -v
+
+# ---------- Convenience ----------
+.PHONY: curl-health
+curl-health: ## Hit /healthz on the local API
+	curl -fsS "http://$(APP_HOST):$(APP_PORT)/healthz" && echo
+
+.PHONY: curl-metrics
+curl-metrics: ## Hit /metrics on the local API
+	curl -fsS "http://$(APP_HOST):$(APP_PORT)/metrics" | head -n 30
