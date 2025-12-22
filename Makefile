@@ -65,7 +65,7 @@ lint-fix: ## Lint and auto-fix (ruff --fix)
 
 .PHONY: typecheck
 typecheck: ## Type-check (mypy)
-	$(MYPY) .
+	$(MYPY) . --exclude '^data/'
 
 .PHONY: qa
 qa: format lint typecheck ## Run format + lint + typecheck
@@ -78,10 +78,6 @@ test: ## Run unit tests
 .PHONY: test-all
 test-all: ## Run full test suite (unit + extras)
 	PYTHONPATH=$$PWD $(PYTEST)
-
-.PHONY: cov
-cov: ## Coverage (requires pytest-cov)
-	PYTHONPATH=$$PWD $(PYTEST) --cov --cov-report=term-missing
 
 # ---------- App (local) ----------
 .PHONY: run
