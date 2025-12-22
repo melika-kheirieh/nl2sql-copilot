@@ -11,12 +11,12 @@ Lightweight eval runner for two modes:
 Examples:
   # Demo (single DB), stub mode
   PYTHONPATH=$PWD PYTEST_CURRENT_TEST=1 \
-  python benchmarks/evaluate_spider.py --db-path demo.db
+  python benchmarks/eval_lite.py --db-path demo.db
 
   # Spider subset (20 items), stub mode
   export SPIDER_ROOT=$PWD/data/spider
   PYTHONPATH=$PWD PYTEST_CURRENT_TEST=1 \
-  python benchmarks/evaluate_spider.py --spider --split dev --limit 20
+  python benchmarks/eval_lite.py --spider --split dev --limit 20
 Notes:
   - In stub mode, all LLM calls are mocked for offline evaluation.
   - Results are saved under benchmarks/results/<timestamp>/.

@@ -65,7 +65,7 @@ lint-fix: ## Lint and auto-fix (ruff --fix)
 
 .PHONY: typecheck
 typecheck: ## Type-check (mypy)
-	$(MYPY) .
+	$(MYPY) . --exclude '^data/'
 
 .PHONY: qa
 qa: format lint typecheck ## Run format + lint + typecheck
@@ -78,10 +78,6 @@ test: ## Run unit tests
 .PHONY: test-all
 test-all: ## Run full test suite (unit + extras)
 	PYTHONPATH=$$PWD $(PYTEST)
-
-.PHONY: cov
-cov: ## Coverage (requires pytest-cov)
-	PYTHONPATH=$$PWD $(PYTEST) --cov --cov-report=term-missing
 
 # ---------- App (local) ----------
 .PHONY: run
@@ -166,3 +162,37 @@ curl-health: ## Hit /healthz on the local API
 .PHONY: curl-metrics
 curl-metrics: ## Hit /metrics on the local API
 	curl -fsS "http://$(APP_HOST):$(APP_PORT)/metrics" | head -n 30
+
+
+# -----------------------------
+# Benchmarks / Evaluation
+
+# Eval-lite (direct pipeline, demo DB)
+eval-smoke: ## Run direct pipeline smoke eval on the demo DB (no Spider needed)
+	PYTHONPATH=$$PWD \
+	PYTEST_CURRENT_TEST=1 \
+	python benchmarks/eval_lite.py --db-path demo.db
+
+# Spider eval-pro presets
+SPIDER_SPLIT ?= dev
+EVAL_PRO_LIMIT ?= 200
+EVAL_PRO_SMOKE_LIMIT ?= 20
+
+eval-pro-smoke: ## Run Spider eval-pro (smoke preset)
+	PYTHONPATH=$$PWD \
+	python benchmarks/eval_spider_pro.py --spider --split $(SPIDER_SPLIT) --limit $(EVAL_PRO_SMOKE_LIMIT)
+
+eval-pro: ## Run Spider eval-pro (default limit via EVAL_PRO_LIMIT)
+	PYTHONPATH=$$PWD \
+	python benchmarks/eval_spider_pro.py --spider --split $(SPIDER_SPLIT) --limit $(EVAL_PRO_LIMIT)
+
+# Benchmark dashboard
+PORT ?= 8501
+
+bench-ui: ## Run Streamlit benchmark dashboard (reads benchmarks/results/**/*.jsonl)
+	PYTHONPATH=$$PWD \
+	streamlit run ui/benchmark_app.py --server.port $(PORT)
+
+plot-pro: ## Plot latest Spider eval-pro results (PNG artifacts)
+	PYTHONPATH=$$PWD \
+	python benchmarks/plot_results.py

@@ -5,7 +5,7 @@ from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import pandas as pd
+import pandas as pd  # type: ignore
 import streamlit as st
 
 
