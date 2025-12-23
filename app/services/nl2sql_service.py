@@ -1,25 +1,25 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from typing import Any, Optional
 from pathlib import Path
+from typing import Any, Optional
 
-from nl2sql.pipeline import FinalResult
-from nl2sql.pipeline_factory import pipeline_from_config_with_adapter
-from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.db.postgres_adapter import PostgresAdapter
+from adapters.db.sqlite_adapter import SQLiteAdapter
 from adapters.metrics.prometheus import PrometheusMetrics
-
 from app import state
-from app.settings import Settings
 from app.errors import (
     AppError,
     DbNotFound,
-    SchemaRequired,
-    SchemaDeriveError,
     PipelineConfigError,
     PipelineRunError,
+    SchemaDeriveError,
+    SchemaRequired,
 )
+from app.settings import Settings
+from nl2sql.pipeline import FinalResult
+from nl2sql.pipeline_factory import pipeline_from_config_with_adapter
 
 Adapter = Any  # You can replace this with a Protocol later
 
@@ -53,7 +53,11 @@ class NL2SQLService:
                 raise DbNotFound(f"Could not resolve DB for db_id={db_id!r}")
             return SQLiteAdapter(path=path)
 
-        default_path = self.settings.default_sqlite_path
+        # Allow tests (and deployments) to override the default DB path at runtime
+        # even if Settings was instantiated before env vars were patched.
+        default_path = (
+            os.getenv("DEFAULT_SQLITE_PATH") or self.settings.default_sqlite_path
+        )
         if not Path(default_path).exists():
             raise DbNotFound(f"SQLite database path does not exist: {default_path!r}")
 
