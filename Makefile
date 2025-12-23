@@ -132,36 +132,50 @@ infra-ps: ## Show running containers for the infra stack
 infra-logs: ## Tail infra logs
 	docker compose -f $(INFRA_COMPOSE) logs -f --tail=200
 
-# ---------- Smoke (system + metrics) ----------
+# ---------- Smoke & Demo ----------
+API_BASE ?= http://$(APP_HOST):$(APP_PORT)
+PROMETHEUS_URL ?= http://127.0.0.1:9090
+
 .PHONY: smoke
-smoke: ## Run smoke tests (system + Prometheus metrics validation)
-	API_KEY="$(API_KEY)" ./scripts/smoke_metrics.sh
+smoke: ## Run full smoke (API + Prometheus validation)
+	@$(MAKE) demo-smoke
+	@$(MAKE) demo-metrics
 
 .PHONY: demo
-demo: ## Demo helper (prints the 2-terminal commands)
-	@echo "Demo is a 2-step flow:"
+demo: ## Print steps to run the local demo (API + UI)
+	@echo "Local demo (2 terminals):"
 	@echo
-	@echo "Terminal 1:"
+	@echo "Terminal 1 (API):"
 	@echo "  make demo-up"
 	@echo
-	@echo "Terminal 2:"
-	@echo "  make demo-smoke"
+	@echo "Terminal 2 (UI):"
+	@echo "  make demo-ui-up"
 	@echo
-	@echo "Optional (metrics validation, requires Prometheus running):"
-	@echo "  make demo-metrics"
+	@echo "Optional checks:"
+	@echo "  make demo-smoke     # quick API sanity (portable)"
+	@echo "  make demo-metrics   # Prometheus validation (requires Prometheus at $$PROMETHEUS_URL)"
 
+.PHONY: demo-up
 demo-up: ## Start the API locally (blocking)
 	$(UVICORN) app.main:application --host $(APP_HOST) --port $(APP_PORT)
 
-demo-smoke: ## Run a portable API smoke (no jq required)
-	API_BASE=http://$(APP_HOST):$(APP_PORT) \
+.PHONY: demo-ui-up
+demo-ui-up: ## Run Gradio UI locally (talks to the API)
+	API_BASE=$(API_BASE) \
+	API_KEY=$${API_KEY:-dev-key} \
+	$(PY) demo/app.py
+
+.PHONY: demo-smoke
+demo-smoke: ## Quick API smoke (portable; no jq required)
+	API_BASE=$(API_BASE) \
 	API_KEY=$${API_KEY:-dev-key} \
 	$(PY) scripts/smoke_api.py
 
-demo-metrics: ## Validate Prometheus signals after running demo-smoke (no jq required)
-	API_BASE=http://$(APP_HOST):$(APP_PORT) \
+.PHONY: demo-metrics
+demo-metrics: ## Validate Prometheus signals after demo-smoke (portable; no jq required)
+	API_BASE=$(API_BASE) \
 	API_KEY=$${API_KEY:-dev-key} \
-	PROMETHEUS_URL=$${PROMETHEUS_URL:-http://127.0.0.1:9090} \
+	PROMETHEUS_URL=$${PROMETHEUS_URL:-$(PROMETHEUS_URL)} \
 	$(PY) scripts/smoke_metrics.py
 
 # ---------- Cleanup ----------
