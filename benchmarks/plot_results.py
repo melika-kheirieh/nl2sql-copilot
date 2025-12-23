@@ -17,6 +17,16 @@ import matplotlib.pyplot as plt
 
 ROOT = Path("benchmarks/results_pro")
 
+STAGES = [
+    "detector",
+    "planner",
+    "generator",
+    "safety",
+    "executor",
+    "verifier",
+    "repair",
+]
+
 
 def _latest_run_dir() -> Path:
     summaries = sorted(
@@ -35,6 +45,31 @@ def _load_eval_rows(run: Path) -> list[dict]:
     p = run / "eval.jsonl"
     lines = p.read_text(encoding="utf-8").splitlines()
     return [json.loads(x) for x in lines]
+
+
+def _normalize_trace(trace) -> dict[str, int]:
+    """
+    Normalize trace into {stage: total_ms}.
+    - Enforces known stages
+    - Coerces duration_ms to int
+    - Safe against malformed input
+    """
+    out = {s: 0 for s in STAGES}
+    if not isinstance(trace, list):
+        return out
+
+    for t in trace:
+        if not isinstance(t, dict):
+            continue
+        stage = str(t.get("stage", "")).lower()
+        if stage not in out:
+            continue
+        ms = t.get("duration_ms", t.get("ms", 0))
+        try:
+            out[stage] += int(round(float(ms)))
+        except Exception:
+            continue
+    return out
 
 
 def plot_metrics_overview(run: Path, summary: dict) -> None:
@@ -87,39 +122,24 @@ def plot_latency_hist(run: Path, rows: list[dict]) -> None:
 
 
 def plot_latency_per_stage(run: Path, summary: dict, rows: list[dict]) -> None:
-    stages = [
-        "detector",
-        "planner",
-        "generator",
-        "safety",
-        "executor",
-        "verifier",
-        "repair",
-    ]
-
     # Prefer summary keys if available
-    raw_values = [summary.get(f"{s}_avg_ms") for s in stages]
+    raw_values = [summary.get(f"{s}_avg_ms") for s in STAGES]
     values: list[float] = [float(v or 0.0) for v in raw_values]
 
-    # Fallback: derive from traces
+    # Fallback: derive from normalized traces
     if not any(values):
-        totals = {s: 0.0 for s in stages}
-        counts = {s: 0 for s in stages}
+        totals = {s: 0 for s in STAGES}
+        counts = {s: 0 for s in STAGES}
         for r in rows:
-            trace = r.get("trace") or r.get("traces") or []
-            for t in trace:
-                s = t.get("stage")
-                if s in totals:
-                    ms = t.get("ms", t.get("duration_ms", 0.0))
-                    try:
-                        totals[s] += float(ms)
-                        counts[s] += 1
-                    except Exception:
-                        pass
-        values = [round(totals[s] / counts[s], 2) if counts[s] else 0.0 for s in stages]
+            durations = _normalize_trace(r.get("trace") or r.get("traces"))
+            for s in STAGES:
+                if durations[s] > 0:
+                    totals[s] += durations[s]
+                    counts[s] += 1
+        values = [round(totals[s] / counts[s], 2) if counts[s] else 0.0 for s in STAGES]
 
     plt.figure(figsize=(10, 5))
-    bars = plt.bar(stages, values)
+    bars = plt.bar(STAGES, values)
     for b, v in zip(bars, values):
         plt.text(
             b.get_x() + b.get_width() / 2,
