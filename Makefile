@@ -1,3 +1,4 @@
+# (Generated patch) UX: guided full bring-up + fail-fast Prometheus readiness for demo-metrics
 # ==============================================================
 # Makefile — NL2SQL Copilot
 # Practical, low-drift, but not underpowered.
@@ -132,6 +133,21 @@ infra-ps: ## Show running containers for the infra stack
 infra-logs: ## Tail infra logs
 	docker compose -f $(INFRA_COMPOSE) logs -f --tail=200
 
+.PHONY: prom-ready
+prom-ready: ## Check Prometheus is reachable (for demo-metrics, dashboards, etc.)
+	@curl -fsS "$(PROMETHEUS_URL)/-/ready" >/dev/null || ( \
+	  echo "❌ Prometheus not reachable at $(PROMETHEUS_URL)"; \
+	  echo "👉 Start infra: make infra-up"; \
+	  exit 2 )
+
+.PHONY: grafana-ready
+grafana-ready: ## Check Grafana is reachable
+	@curl -fsS "http://127.0.0.1:3000/api/health" >/dev/null || ( \
+	  echo "❌ Grafana not reachable at http://127.0.0.1:3000"; \
+	  echo "👉 Start infra: make infra-up"; \
+	  exit 2 )
+
+
 # ---------- Smoke & Demo ----------
 API_BASE ?= http://$(APP_HOST):$(APP_PORT)
 PROMETHEUS_URL ?= http://127.0.0.1:9090
@@ -143,17 +159,35 @@ smoke: ## Run full smoke (API + Prometheus validation)
 
 .PHONY: demo
 demo: ## Print steps to run the local demo (API + UI)
-	@echo "Local demo (2 terminals):"
+	@echo "Local demo (full stack, 3+ terminals):"
 	@echo
-	@echo "Terminal 1 (API):"
+	@echo "Terminal A (Infra: Prometheus/Grafana/Alertmanager):"
+	@echo "  make infra-up"
+	@echo "  make infra-ps"
+	@echo
+	@echo "Terminal B (API - blocking):"
 	@echo "  make demo-up"
 	@echo
-	@echo "Terminal 2 (UI):"
+	@echo "Terminal C (Smoke + metrics):"
+	@echo "  make demo-smoke"
+	@echo "  make demo-metrics"
+	@echo
+	@echo "Terminal D (UI):"
 	@echo "  make demo-ui-up"
+	@echo "  make bench-ui"
 	@echo
 	@echo "Optional checks:"
 	@echo "  make demo-smoke     # quick API sanity (portable)"
 	@echo "  make demo-metrics   # Prometheus validation (requires Prometheus at $$PROMETHEUS_URL)"
+
+.PHONY: demo-bootstrap
+demo-bootstrap: ## Start infra, then print the exact next steps (API is blocking)
+	@$(MAKE) infra-up
+	@echo
+	@echo "Next:"
+	@echo "  Terminal B: make demo-up"
+	@echo "  Terminal C: make demo-smoke && make demo-metrics"
+	@echo "  Optional:  make demo-ui-up (Gradio) / make bench-ui (Streamlit)"
 
 .PHONY: demo-up
 demo-up: ## Start the API locally (blocking)
@@ -172,7 +206,7 @@ demo-smoke: ## Quick API smoke (portable; no jq required)
 	$(PY) scripts/smoke_api.py
 
 .PHONY: demo-metrics
-demo-metrics: ## Validate Prometheus signals after demo-smoke (portable; no jq required)
+demo-metrics: prom-ready ## Validate Prometheus signals after demo-smoke (portable; no jq required)
 	API_BASE=$(API_BASE) \
 	API_KEY=$${API_KEY:-dev-key} \
 	PROMETHEUS_URL=$${PROMETHEUS_URL:-$(PROMETHEUS_URL)} \
