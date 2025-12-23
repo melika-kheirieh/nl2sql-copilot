@@ -93,6 +93,9 @@ Then (optional Prometheus snapshot):
 make demo-metrics
 ```
 
+>For a complete end-to-end setup (API, infra, metrics, dashboards, UIs),
+see [docs//runbook.md](docs//runbook.md).
+
 ---
 
 ## What the system does
