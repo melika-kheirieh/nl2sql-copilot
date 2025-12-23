@@ -145,7 +145,7 @@ def query_to_sql(
 
     # Compute simple latency badge from traces (sum of duration_ms)
     badges_text = ""
-    if traces and all("duration_ms" in t for t in traces):
+    if _debug_flag and traces and all("duration_ms" in t for t in traces):
         total_ms = sum(float(t.get("duration_ms", 0.0)) for t in traces)
         badges_text = f"latency≈{int(total_ms)}ms"
 
@@ -200,7 +200,7 @@ def build_ui() -> gr.Blocks:
             )
             debug = gr.Checkbox(
                 label="Debug (UI only)",
-                value=True,
+                value=False,
                 scale=1,
             )
             run = gr.Button("Run")
