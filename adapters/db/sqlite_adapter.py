@@ -21,13 +21,42 @@ class SQLiteAdapter(DBAdapter):
             raise FileNotFoundError(f"SQLite DB does not exist: {self.path}")
         with sqlite3.connect(f"file:{self.path}?mode=ro", uri=True) as conn:
             cur = conn.cursor()
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name;"
+            )
             tables = [t[0] for t in cur.fetchall()]
             lines = []
             for t in tables:
-                cur.execute(f"PRAGMA table_info({t});")
+                safe_t = t.replace("'", "''")
+                cur.execute(f"PRAGMA table_info('{safe_t}');")
                 cols = [f"{c[1]}:{c[2]}" for c in cur.fetchall()]
                 lines.append(f"- {t} ({', '.join(cols)})")
+            return "\n".join(lines)
+
+    def derive_schema_preview(self) -> str:
+        """Return a stable schema preview string for prompts/evaluation."""
+        # Keep this aligned with eval runners: one line per table: Table(col1, col2, ...)
+        if not self.path.exists():
+            raise FileNotFoundError(f"SQLite DB does not exist: {self.path}")
+
+        with sqlite3.connect(f"file:{self.path}?mode=ro", uri=True) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+                "ORDER BY name;"
+            )
+            tables = [t[0] for t in cur.fetchall()]
+            lines: List[str] = []
+            for t in tables:
+                safe_t = t.replace("'", "''")
+                cur.execute(f"PRAGMA table_info('{safe_t}');")
+                cols = [row[1] for row in cur.fetchall() if row and row[1]]
+                if cols:
+                    lines.append(f"{t}({', '.join(cols)})")
+                else:
+                    lines.append(f"{t}()")
             return "\n".join(lines)
 
     def execute(self, sql: str) -> Tuple[List[Tuple[Any, ...]], List[str]]:
@@ -65,25 +94,3 @@ class SQLiteAdapter(DBAdapter):
             # Rows are typically (id, parent, notused, detail)
             plan_lines: List[str] = [str(r[-1]) for r in rows if r]
             return plan_lines
-
-    def derive_schema_preview(self) -> str:
-        if not self.path.exists():
-            raise FileNotFoundError(f"SQLite DB does not exist: {self.path}")
-
-        with sqlite3.connect(f"file:{self.path}?mode=ro", uri=True) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name NOT LIKE 'sqlite_%' "
-                "ORDER BY name;"
-            )
-            tables = [t[0] for t in cur.fetchall() if t and t[0]]
-
-            lines: list[str] = []
-            for t in tables:
-                cur.execute("PRAGMA table_info(?);", (t,))  # safer than f-string
-                cols = [c[1] for c in cur.fetchall() if c and len(c) >= 2]
-                if cols:
-                    lines.append(f"{t}({', '.join(cols)})")
-
-            return "\n".join(lines)
