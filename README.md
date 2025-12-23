@@ -16,6 +16,35 @@ A live interactive demo is available on Hugging Face Spaces: 👉 [**Try the Dem
   <img src="docs/assets/screenshots/demo_list_albums_total_sales.png" width="700">
 </p>
 
+
+
+## Quickstart (Local)
+
+### 1) Install
+```bash
+make install
+```
+
+### 2) Run API (Terminal 1)
+```bash
+make demo-up
+```
+
+### 3) Smoke (Terminal 2)
+```bash
+make demo-smoke
+```
+
+### 4) Observability stack (optional)
+```bash
+make infra-up
+```
+
+Then (optional Prometheus snapshot):
+```bash
+make demo-metrics
+```
+
 ---
 
 ## Why this exists

@@ -77,11 +77,11 @@ qa: format lint typecheck metrics-check ## Run format + lint + typecheck + metri
 # ---------- Tests ----------
 .PHONY: test
 test: ## Run unit tests
-	PYTHONPATH=$$PWD $(PYTEST) -q
+	PYTHONPATH=$$PWD $(PYTEST) -qq
 
 .PHONY: test-all
 test-all: ## Run full test suite (unit + extras)
-	PYTHONPATH=$$PWD $(PYTEST)
+	PYTHONPATH=$$PWD $(PYTEST) -qq
 
 # ---------- App (local) ----------
 .PHONY: run
@@ -138,15 +138,31 @@ smoke: ## Run smoke tests (system + Prometheus metrics validation)
 	API_KEY="$(API_KEY)" ./scripts/smoke_metrics.sh
 
 .PHONY: demo
-demo: ## Full demo: prom-check -> infra-up -> smoke
-	$(MAKE) prom-check
-	$(MAKE) infra-up
-	$(MAKE) smoke
+demo: ## Demo helper (prints the 2-terminal commands)
+	@echo "Demo is a 2-step flow:"
 	@echo
-	@echo "Done."
-	@echo "API:        http://$(APP_HOST):$(APP_PORT)/docs"
-	@echo "Prometheus: http://$(APP_HOST):9090"
-	@echo "Grafana:    http://$(APP_HOST):3000"
+	@echo "Terminal 1:"
+	@echo "  make demo-up"
+	@echo
+	@echo "Terminal 2:"
+	@echo "  make demo-smoke"
+	@echo
+	@echo "Optional (metrics validation, requires Prometheus running):"
+	@echo "  make demo-metrics"
+
+demo-up: ## Start the API locally (blocking)
+	$(UVICORN) app.main:application --host $(APP_HOST) --port $(APP_PORT)
+
+demo-smoke: ## Run a portable API smoke (no jq required)
+	API_BASE=http://$(APP_HOST):$(APP_PORT) \
+	API_KEY=$${API_KEY:-dev-key} \
+	$(PY) scripts/smoke_api.py
+
+demo-metrics: ## Validate Prometheus signals after running demo-smoke (no jq required)
+	API_BASE=http://$(APP_HOST):$(APP_PORT) \
+	API_KEY=$${API_KEY:-dev-key} \
+	PROMETHEUS_URL=$${PROMETHEUS_URL:-http://127.0.0.1:9090} \
+	$(PY) scripts/smoke_metrics.py
 
 # ---------- Cleanup ----------
 .PHONY: clean
@@ -200,3 +216,6 @@ bench-ui: ## Run Streamlit benchmark dashboard (reads benchmarks/results/**/*.js
 plot-pro: ## Plot latest Spider eval-pro results (PNG artifacts)
 	PYTHONPATH=$$PWD \
 	python benchmarks/plot_results.py
+
+
+.PHONY: demo demo-up demo-smoke demo-metrics
