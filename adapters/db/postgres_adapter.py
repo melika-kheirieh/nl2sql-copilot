@@ -83,3 +83,27 @@ class PostgresAdapter(DBAdapter):
                 # psycopg returns rows like ("Seq Scan on ...",)
                 plan_lines: List[str] = [str(r[0]) for r in rows if r and len(r) >= 1]
                 return plan_lines
+
+    def derive_schema_preview(self) -> str:
+        """
+        LLM/eval schema preview. One line per table: table(col1, col2, ...)
+        """
+        with psycopg.connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT table_name, column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                    ORDER BY table_name, ordinal_position;
+                    """
+                )
+                rows = cur.fetchall() or []
+
+        tables: dict[str, list[str]] = {}
+        for table, col in rows:
+            if table and col:
+                tables.setdefault(table, []).append(col)
+
+        lines = [f"{t}({', '.join(cols)})" for t, cols in tables.items() if cols]
+        return "\n".join(lines)

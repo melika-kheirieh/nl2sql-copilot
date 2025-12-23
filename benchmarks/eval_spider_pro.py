@@ -37,6 +37,46 @@ STAGES = [
     "repair",
 ]
 
+
+def _schema_preview_for_db(db_path: Path) -> str:
+    """Return LLM/eval schema preview using the adapter (preferred)."""
+    try:
+        adapter = SQLiteAdapter(str(db_path))
+        if hasattr(adapter, "derive_schema_preview"):
+            return adapter.derive_schema_preview()  # type: ignore[no-any-return]
+    except Exception:
+        pass
+    return ""
+
+
+def _normalize_traces(trace_obj: Any) -> List[Dict[str, Any]]:
+    """Normalize traces to JSON-serializable dicts and round duration_ms to int."""
+    if not isinstance(trace_obj, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for t in trace_obj:
+        d: Dict[str, Any]
+        if isinstance(t, dict):
+            d = dict(t)
+        else:
+            d = {
+                "stage": getattr(t, "stage", "?"),
+                "duration_ms": getattr(t, "duration_ms", 0),
+                "notes": getattr(t, "notes", None),
+                "cost_usd": getattr(t, "cost_usd", None),
+            }
+
+        ms = d.get("duration_ms", d.get("ms", 0))
+        try:
+            d["duration_ms"] = int(round(float(ms)))
+        except Exception:
+            d["duration_ms"] = 0
+
+        d["stage"] = str(d.get("stage", "?"))
+        out.append(_flatten_trace_entry(d))
+    return out
+
+
 # -------------------------- SQL utils -----------------------
 
 
@@ -186,15 +226,21 @@ def format_schema_for_prompt(schema: Dict[str, Any]) -> str:
 def _exec_sql(db: Path, sql: str) -> Tuple[bool, List[Tuple]]:
     if not sql:
         return False, []
+    conn = None
     try:
         conn = sqlite3.connect(str(db))
         cur = conn.cursor()
         cur.execute(sql)
         rows = cur.fetchall()
-        conn.close()
         return True, rows
     except Exception:
         return False, []
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
 
 
 def _same_rows(a: List[Tuple], b: List[Tuple]) -> bool:
@@ -323,8 +369,7 @@ def run_pipeline_on_sample(
     """Run pipeline on one sample and extract normalized prediction + traces."""
     # cache schema
     if sample.db_id not in schema_cache:
-        schema_dict = get_database_schema(sample.db_path)
-        schema_cache[sample.db_id] = format_schema_for_prompt(schema_dict)
+        schema_cache[sample.db_id] = _schema_preview_for_db(sample.db_path)
         if debug:
             print(
                 f"    [schema] Loaded {len(schema_cache[sample.db_id])} chars for {sample.db_id}"
@@ -347,7 +392,9 @@ def run_pipeline_on_sample(
         return {
             "ok": bool(getattr(res, "ok", True)),
             "sql": pred_sql,
-            "trace": getattr(res, "traces", []) or getattr(res, "trace", []),
+            "trace": _normalize_traces(
+                getattr(res, "traces", []) or getattr(res, "trace", [])
+            ),
             "error": None,
         }
     except Exception as e:

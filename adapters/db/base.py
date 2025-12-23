@@ -8,7 +8,10 @@ class DBAdapter(Protocol):
     dialect: str
 
     def preview_schema(self, limit_per_table: int = 0) -> str:
-        """Generate a readable summary of the database schema with optional sample rows per table."""
+        """Human-friendly schema preview (may include types, bullets, samples)."""
+
+    def derive_schema_preview(self) -> str:
+        """LLM/eval schema preview. Format: table(col1, col2, ...) one per line."""
 
     def execute(self, sql: str) -> Tuple[List[Tuple[Any, ...]], List[str]]:
         """Execute a SELECT query and return (rows, columns)."""
