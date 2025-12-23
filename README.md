@@ -53,9 +53,12 @@ A live interactive demo is available on Hugging Face Spaces:
 👉 [**Try the Demo**](https://huggingface.co/spaces/melikakheirieh/nl2sql-copilot)
 
 <p align="center">
-  <img src="docs/assets/screenshots/demo_list_albums_total_sales.png" width="700">
+  <img src="docs/assets/screenshots/hf_minimal_demo.png" width="700">
 </p>
 
+> This is a minimal end-to-end demo of the deployed system.
+> Detailed UI inspection views (trace, repair, timings) are documented in
+> [docs/ui.md](docs/ui.md).
 ---
 
 ## Quickstart (Local)
