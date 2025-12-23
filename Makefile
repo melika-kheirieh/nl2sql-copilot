@@ -68,7 +68,7 @@ typecheck: ## Type-check (mypy)
 	$(MYPY) . --exclude '^data/'
 
 .PHONY: metrics-check
-metrics-check: ## Verify Prometheus/Grafana queries match defined metrics
+metrics-check: ## Verify Prometheus rules + Grafana dashboards match defined metrics
 	$(PY) scripts/verify_metrics_wiring.py
 
 .PHONY: qa
