@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 
 import json
 import re
@@ -13,15 +12,18 @@ PROMETHEUS_FILE = ROOT / "adapters" / "metrics" / "prometheus.py"
 RULES_FILE = ROOT / "infra" / "prometheus" / "rules.yml"
 DASHBOARD_DIR = ROOT / "infra" / "grafana" / "dashboards"
 
-# Extract metric definitions from prometheus_client constructors
-# e.g. Counter("pipeline_runs_total", ...), Histogram("stage_duration_ms", ...)
-METRIC_DEF_RE = re.compile(r'\b(?:Counter|Histogram|Summary|Gauge)\(\s*"([^"]+)"')
+# Extract metric names from prometheus client constructors:
+# Counter("x", ...), Gauge("x", ...), Histogram("x", ...), Summary("x", ...)
+METRIC_CTOR_RE = re.compile(r'\b(?:Counter|Gauge|Histogram|Summary)\(\s*"([^"]+)"')
 
-# Tokenize possible PromQL identifiers
+# Fallback in case a metric is defined via keyword arg name="..."
+METRIC_NAME_KW_RE = re.compile(r'\bname\s*=\s*"([^"]+)"')
+
+# PromQL token pattern
 PROMQL_TOKEN_RE = re.compile(r"([a-zA-Z_:][a-zA-Z0-9_:]*)")
 
 PROMQL_KEYWORDS_AND_FUNCS = {
-    # funcs / aggs
+    # aggregations / funcs
     "sum",
     "rate",
     "increase",
@@ -30,16 +32,21 @@ PROMQL_KEYWORDS_AND_FUNCS = {
     "min",
     "max",
     "count",
-    "histogram_quantile",
-    "quantile",
-    "topk",
+    "count_values",
+    "stddev",
+    "stdvar",
     "bottomk",
+    "topk",
+    "quantile",
+    "histogram_quantile",
     "clamp_min",
     "clamp_max",
     "abs",
     "round",
     "floor",
     "ceil",
+    "scalar",
+    "vector",
     "sort",
     "sort_desc",
     "label_replace",
@@ -54,17 +61,13 @@ PROMQL_KEYWORDS_AND_FUNCS = {
     "ignoring",
     "group_left",
     "group_right",
-    "and",
-    "or",
-    "unless",
-    # literals
+    # literals / common
     "true",
     "false",
     "nan",
     "inf",
 }
 
-# Common label keys that may appear as tokens in dashboards / JSON / YAML
 PROMQL_LABEL_KEYS = {
     "le",
     "job",
@@ -74,71 +77,122 @@ PROMQL_LABEL_KEYS = {
     "outcome",
     "hit",
     "ok",
-    "reason",
 }
 
-GENERATED_SUFFIXES = ("_bucket", "_sum", "_count", "_created")
+# label values that appear in your rules/dashboards
+PROMQL_COMMON_LABEL_VALUES = {
+    "attempt",
+    "success",
+    "failed",
+    "ok",
+    "error",
+    "true",
+    "false",
+}
+
+# time units that can show up e.g. [5m], [10s]
+PROMQL_TIME_UNITS = {"ms", "s", "m", "h", "d", "w", "y"}
 
 
 def extract_defined_metrics() -> set[str]:
     text = PROMETHEUS_FILE.read_text(encoding="utf-8")
-    return set(METRIC_DEF_RE.findall(text))
+    defined = set(METRIC_CTOR_RE.findall(text))
+    defined |= set(METRIC_NAME_KW_RE.findall(text))
+    return defined
 
 
-def iter_rule_exprs_from_yaml_text(text: str) -> Iterable[str]:
+def _collect_promql_from_rules_yml(text: str) -> list[str]:
     """
-    Minimal YAML extraction for Prometheus rules.yml:
-    - extracts only values under 'expr:' keys
-    - supports:
-        expr: <single line>
-        expr: |
-          <multiline>
-        expr: >
-          <multiline folded>
-    We do NOT parse the whole YAML (no dependency on PyYAML).
+    Extract only PromQL expressions from rules.yml:
+    - expr: <single line>
+    - expr: |  (multiline indented block)
+    - expr: >  (multiline indented block)
     """
     lines = text.splitlines()
+    exprs: list[str] = []
+
     i = 0
     while i < len(lines):
         line = lines[i]
-        m = re.match(r"^(\s*)expr:\s*(.*)\s*$", line)
-        if not m:
+        stripped = line.lstrip()
+        if not stripped.startswith("expr:"):
             i += 1
             continue
 
-        indent = len(m.group(1))
-        rest = m.group(2)
+        indent = len(line) - len(stripped)
+        rest = stripped[len("expr:") :].strip()
 
-        # Block scalar
-        if rest in ("|", ">"):
+        # Case 1: expr: <single-line>
+        if rest and rest not in {"|", ">"}:
+            exprs.append(rest)
             i += 1
-            block_lines: list[str] = []
-            while i < len(lines):
-                ln = lines[i]
-                # stop when indentation goes back to <= expr indent
-                if ln.strip() == "":
-                    block_lines.append("")
-                    i += 1
-                    continue
-                if len(ln) - len(ln.lstrip(" ")) <= indent:
-                    break
-                block_lines.append(ln.strip())
-                i += 1
-            yield "\n".join(block_lines).strip()
             continue
 
-        # Single-line expr
-        yield rest.strip().strip('"').strip("'")
+        # Case 2: expr: | or expr: > or expr: (empty) with following indented block
         i += 1
+        block_lines: list[str] = []
+        while i < len(lines):
+            nxt = lines[i]
+            nxt_stripped = nxt.lstrip()
+            nxt_indent = len(nxt) - len(nxt_stripped)
+
+            # Stop when indentation returns to expr level (or less)
+            if nxt_stripped and nxt_indent <= indent:
+                break
+
+            # Keep blank lines inside block as separators
+            block_lines.append(nxt_stripped)
+            i += 1
+
+        expr = "\n".join(block_lines).strip()
+        if expr:
+            exprs.append(expr)
+
+    return exprs
+
+
+def _collect_promql_from_dashboard_json(obj: Any) -> Iterable[str]:
+    """
+    Recursively collect PromQL strings from Grafana dashboard JSON.
+    Common keys are: "expr" (Prometheus target), sometimes "query".
+    """
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in {"expr", "query"} and isinstance(v, str):
+                yield v
+            else:
+                yield from _collect_promql_from_dashboard_json(v)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _collect_promql_from_dashboard_json(item)
+
+
+def extract_promql_sources() -> list[str]:
+    sources: list[str] = []
+
+    # rules.yml
+    rules_text = RULES_FILE.read_text(encoding="utf-8")
+    sources.extend(_collect_promql_from_rules_yml(rules_text))
+
+    # dashboards
+    for path in DASHBOARD_DIR.glob("**/*.json"):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        sources.extend(list(_collect_promql_from_dashboard_json(data)))
+
+    return sources
 
 
 def extract_metrics_from_promql(promql: str) -> set[str]:
     tokens = set(PROMQL_TOKEN_RE.findall(promql))
-    out = set()
+    out: set[str] = set()
     for t in tokens:
         if t in PROMQL_KEYWORDS_AND_FUNCS:
             continue
         if t in PROMQL_LABEL_KEYS:
+            continue
+        if t in PROMQL_COMMON_LABEL_VALUES:
+            continue
+        if t in PROMQL_TIME_UNITS:
             continue
         if t.isupper():
             continue
@@ -146,44 +200,15 @@ def extract_metrics_from_promql(promql: str) -> set[str]:
     return out
 
 
-def extract_used_metrics() -> set[str]:
-    used: set[str] = set()
-
-    # rules.yml: only expr fields
-    rules_text = RULES_FILE.read_text(encoding="utf-8")
-    for expr in iter_rule_exprs_from_yaml_text(rules_text):
-        used |= extract_metrics_from_promql(expr)
-
-    # dashboards: only targets[].expr
-    for path in DASHBOARD_DIR.glob("**/*.json"):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        used |= extract_metrics_from_dashboard_json(data)
-
-    return used
-
-
-def extract_metrics_from_dashboard_json(obj: Any) -> set[str]:
-    metrics: set[str] = set()
-
-    def walk(o: Any) -> None:
-        if isinstance(o, dict):
-            for k, v in o.items():
-                if k == "expr" and isinstance(v, str):
-                    metrics.update(extract_metrics_from_promql(v))
-                else:
-                    walk(v)
-        elif isinstance(o, list):
-            for x in o:
-                walk(x)
-
-    walk(obj)
-    return metrics
-
-
-def is_generated_series(metric: str, defined: set[str]) -> bool:
-    # Accept histogram/summary generated series like <base>_bucket/_sum/_count/_created
+def is_generated_from_defined(metric: str, defined: set[str]) -> bool:
+    """
+    Accept generated series from client libraries:
+      - Histogram: <base>_bucket, <base>_sum, <base>_count, <base>_created
+      - Summary:   <base>_sum, <base>_count, <base>_created
+    """
+    generated_suffixes = ("_bucket", "_sum", "_count", "_created")
     for base in defined:
-        for suf in GENERATED_SUFFIXES:
+        for suf in generated_suffixes:
             if metric == f"{base}{suf}":
                 return True
     return False
@@ -191,17 +216,19 @@ def is_generated_series(metric: str, defined: set[str]) -> bool:
 
 def main() -> None:
     defined = extract_defined_metrics()
-    if not defined:
-        print(f"❌ No metrics detected in {PROMETHEUS_FILE}. Regex may be wrong.")
-        sys.exit(1)
+    promql_sources = extract_promql_sources()
 
-    used = extract_used_metrics()
+    used: set[str] = set()
+    for q in promql_sources:
+        used |= extract_metrics_from_promql(q)
 
-    # Only validate raw metrics (exclude recording rules, which contain ':')
+    # Ignore recorded series (contain ':') — derived metrics are allowed.
     missing = sorted(
         m
         for m in used
-        if ":" not in m and m not in defined and not is_generated_series(m, defined)
+        if ":" not in m
+        and m not in defined
+        and not is_generated_from_defined(m, defined)
     )
 
     if missing:
