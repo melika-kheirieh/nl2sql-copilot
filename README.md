@@ -254,6 +254,23 @@ Their purpose is to validate **system behavior** — such as failure modes,
 latency distributions, and repair effectiveness —
 rather than to optimize leaderboard scores or claim state-of-the-art accuracy.
 
+### Benchmark dashboard
+
+Evaluation runs can be inspected interactively via a Streamlit dashboard,
+designed for **diagnostics and system-level inspection** rather than score reporting.
+
+<p align="center">
+  <img src="docs/assets/benchmark_dashboard.png" width="720">
+</p>
+
+The dashboard exposes:
+- end-to-end and per-stage latency distributions (p50 / p95),
+- success and failure rates,
+- and high-level signals for repair and system behavior during evaluation.
+
+This view is intentionally scoped to **behavioral and operational signals**,
+and complements the raw artifacts written to `benchmarks/results*/`.
+
 ### Evaluation modes
 
 #### 1) Eval Lite (Smoke & diagnostics)
