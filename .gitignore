@@ -57,6 +57,7 @@ data/tmp/
 **/*.db-wal
 **/*.db-shm
 **/*.db-journal
+demo.db
 
 # Benchmark outputs are generated (timestamps etc.)
 benchmarks/results*/
@@ -69,3 +70,4 @@ temp_*.py
 temp_*.*
 **/temp_*.py
 **/*_temp.py
+demo.db

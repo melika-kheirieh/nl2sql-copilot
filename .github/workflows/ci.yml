@@ -103,6 +103,9 @@ jobs:
           retry_on: error
           command: mypy app
 
+      - name: 🧷 Verify metrics wiring (rules + dashboards)
+        run: make metrics-check
+
       # ---------- TEST + COVERAGE ----------
       - name: 🧪 Tests with coverage threshold (retry)
         uses: nick-fields/retry@v3

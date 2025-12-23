@@ -5,9 +5,8 @@ providers:
     orgId: 1
     folder: ""
     type: file
-    disableDeletion: true            # Prevent dashboard deletion from UI
+    disableDeletion: true
     editable: false
-    updateIntervalSeconds: 10        # How often Grafana scans for changes
+    updateIntervalSeconds: 10
     options:
-      path: /etc/grafana/provisioning/dashboards
-      # Grafana will load any *.json from this directory
+      path: /etc/grafana/provisioning/dashboards/nl2sql
