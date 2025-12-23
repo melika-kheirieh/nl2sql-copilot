@@ -20,6 +20,8 @@ def get_nl2sql_service() -> NL2SQLService:
 def get_cache() -> NL2SQLCache:
     """
     Singleton in-memory cache for NL2SQL responses.
-    TTL is intentionally short; this is a per-process best-effort cache.
+
+    TTL is loaded from Settings (NL2SQL_CACHE_TTL_SEC).
     """
-    return NL2SQLCache(ttl=15.0)
+    settings = get_settings()
+    return NL2SQLCache(ttl=float(settings.cache_ttl_sec))
