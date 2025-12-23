@@ -6,68 +6,97 @@
 !.env.example
 
 # --------------------
-# Python
+# Python build artifacts
 # --------------------
 __pycache__/
 *.py[cod]
 *.pyd
 *.so
+*.egg-info/
+build/
+dist/
 
+# --------------------
+# Virtual environments
+# --------------------
+.venv/
+venv/
+ENV/
+env/
+
+# --------------------
+# Tool caches
+# --------------------
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .hypothesis/
-.tox/
-.nox/
+.cache/
 
+# --------------------
+# Coverage artifacts (never commit)
+# --------------------
 .coverage
 coverage.xml
 htmlcov/
 
-dist/
-build/
-*.egg-info/
-*.egg
-
 # --------------------
-# OS / IDE
+# OS / editor
 # --------------------
 .DS_Store
 Thumbs.db
-.vscode/
 .idea/
+.vscode/
 
 # --------------------
 # Logs
 # --------------------
 *.log
+logs/
 
 # --------------------
-# Project data & generated artifacts
+# Databases
+# Policy:
+# - accidental root demo.db must NEVER be committed
+# - data/demo.db MUST be committed
 # --------------------
+/demo.db
+!/data/demo.db
 
-# Spider dataset is expected to live under data/spider locally (not committed)
-data/spider/
-
-# Uploaded / temp DBs (keep built-in Chinook DB tracked if you committed it)
-data/uploads/
-data/tmp/
-
-# SQLite runtime side-files (safe to ignore anywhere)
+# SQLite runtime side-files (never commit)
 **/*.db-wal
 **/*.db-shm
 **/*.db-journal
-demo.db
 
-# Benchmark outputs are generated (timestamps etc.)
+# --------------------
+# Benchmarks outputs (generated; never commit)
+# --------------------
 benchmarks/results*/
 benchmarks/results_pro/
 
-# temporary python files
+# --------------------
+# Runtime uploads (generated; never commit)
+# --------------------
+data/uploads/
+
+# --------------------
+# Spider dataset (do not commit raw data)
+# Keep a README for instructions if you want
+# --------------------
+data/spider/
+!data/spider/README.md
+
+# --------------------
+# Temporary files
+# --------------------
 *_temp.py
 *_temp.*
 temp_*.py
 temp_*.*
 **/temp_*.py
 **/*_temp.py
-demo.db
+
+# --------------------
+# Jupyter
+# --------------------
+.ipynb_checkpoints/

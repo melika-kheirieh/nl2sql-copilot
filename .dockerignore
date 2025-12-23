@@ -1,49 +1,88 @@
+# --------------------
 # VCS
+# --------------------
 .git
 .github
 
+# --------------------
 # Secrets
+# --------------------
 .env
 .env.*
 
+# --------------------
 # Python caches / test caches
+# --------------------
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .hypothesis/
+.cache/
 
+# --------------------
+# Virtual environments
+# --------------------
+.venv/
+venv/
+ENV/
+env/
+
+# --------------------
 # Coverage artifacts
+# --------------------
 .coverage
 coverage.xml
 htmlcov/
 
-# IDE
-.vscode/
+# --------------------
+# OS / editor
+# --------------------
+.DS_Store
+Thumbs.db
 .idea/
+.vscode/
 
-# Build outputs
-dist/
-build/
-*.egg-info/
+# --------------------
+# Logs
+# --------------------
+*.log
+logs/
 
-# Big / local-only data
-data/spider/
-data/uploads/
-data/tmp/
+# --------------------
+# Databases
+# Only ignore accidental root demo.db
+# --------------------
+/demo.db
 
 # SQLite runtime side-files
 **/*.db-wal
 **/*.db-shm
 **/*.db-journal
 
+# --------------------
 # Generated benchmark outputs
+# --------------------
 benchmarks/results*/
 benchmarks/results_pro/
 
-# temporary python files
+# --------------------
+# Runtime uploads
+# --------------------
+data/uploads/
+
+# --------------------
+# Spider dataset (exclude from image context)
+# --------------------
+data/spider/
+
+# --------------------
+# Temporary files
+# --------------------
 *_temp.py
+*_temp.*
 temp_*.py
+temp_*.*
 **/temp_*.py
 **/*_temp.py
