@@ -65,9 +65,10 @@ def _normalize_trace(trace) -> dict[str, int]:
         if stage not in out:
             continue
         ms = t.get("duration_ms", t.get("ms", 0))
+        raw_ms = ms if ms is not None else 0
         try:
-            out[stage] += int(round(float(ms)))
-        except Exception:
+            out[stage] += int(round(float(raw_ms)))
+        except (TypeError, ValueError):
             continue
     return out
 

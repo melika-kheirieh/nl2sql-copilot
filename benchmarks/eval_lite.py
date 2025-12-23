@@ -68,37 +68,28 @@ def _int_ms(start: float) -> int:
     return int((time.perf_counter() - start) * 1000)
 
 
-def _derive_schema_preview_safe(pipeline_obj: Any) -> Optional[str]:
-    """Safely call derive_schema_preview() if available on adapter/executor."""
-    try:
-        candidates = [
-            getattr(pipeline_obj, "executor", None),
-            getattr(pipeline_obj, "adapter", None),
-        ]
-        for c in candidates:
-            if c and hasattr(c, "derive_schema_preview"):
-                return c.derive_schema_preview()  # type: ignore[no-any-return]
-    except Exception:
-        pass
-    return None
-
-
 def _to_stage_list(trace_obj: Any) -> List[Dict[str, Any]]:
     """Normalize pipeline trace into a list of dicts for logging/CSV export."""
     out: List[Dict[str, Any]] = []
     if not isinstance(trace_obj, list):
         return out
+
     for t in trace_obj:
         if isinstance(t, dict):
             stage = t.get("stage", "?")
-            ms = t.get("duration_ms", 0)
+            ms = t.get("duration_ms", t.get("ms", 0))
         else:
             stage = getattr(t, "stage", "?")
             ms = getattr(t, "duration_ms", 0)
+
         try:
-            out.append({"stage": str(stage), "ms": int(ms)})
-        except Exception:
-            out.append({"stage": str(stage), "ms": 0})
+            raw_ms = ms if ms is not None else 0
+            ms_i = int(round(float(raw_ms)))
+        except (TypeError, ValueError):
+            ms_i = 0
+
+        out.append({"stage": str(stage), "ms": ms_i})
+
     return out
 
 
@@ -215,7 +206,11 @@ def _run_single_db_mode(db_path: Path, questions: List[str], config_path: str) -
     adapter = SQLiteAdapter(str(db_path))
     pipeline = pipeline_from_config_with_adapter(config_path, adapter=adapter)
 
-    schema_preview = _derive_schema_preview_safe(pipeline)
+    schema_preview = (
+        adapter.derive_schema_preview()
+        if hasattr(adapter, "derive_schema_preview")
+        else None
+    )
     if schema_preview:
         print("📄 Derived schema preview ✓")
     else:
@@ -284,8 +279,11 @@ def _run_spider_mode(split: str, limit: int, config_path: str) -> None:
         adapter = SQLiteAdapter(ex.db_path)
         pipeline = pipeline_from_config_with_adapter(config_path, adapter=adapter)
 
-        # derive schema per-DB (optional)
-        schema_preview = _derive_schema_preview_safe(pipeline)
+        schema_preview = (
+            adapter.derive_schema_preview()
+            if hasattr(adapter, "derive_schema_preview")
+            else None
+        )
 
         t0 = time.perf_counter()
         try:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from typing import Any, Optional
 from pathlib import Path
@@ -60,42 +59,6 @@ class NL2SQLService:
 
         return SQLiteAdapter(path=default_path)
 
-    def _introspect_sqlite_schema(self, adapter: Adapter) -> str:
-        """
-        Build a lightweight textual schema preview for a SQLite database.
-
-        This is a straight port of the previous sqlite3 logic, but contained
-        inside the service instead of the router.
-        """
-        db_path = getattr(adapter, "db_path", None) or getattr(adapter, "path", None)
-        if not db_path:
-            raise RuntimeError(
-                "SQLite adapter must expose a .db_path or .path attribute"
-            )
-
-        if not Path(db_path).exists():
-            raise FileNotFoundError(f"SQLite database path does not exist: {db_path}")
-
-        lines: list[str] = []
-        conn = sqlite3.connect(db_path)
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' "
-                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
-            )
-            tables = [row[0] for row in cur.fetchall()]
-
-            for table in tables:
-                cur.execute(f"PRAGMA table_info({table})")
-                cols = [row[1] for row in cur.fetchall()]
-                if cols:
-                    lines.append(f"{table}({', '.join(cols)})")
-        finally:
-            conn.close()
-
-        return "\n".join(lines)
-
     def get_schema_preview(
         self,
         db_id: Optional[str],
@@ -117,7 +80,7 @@ class NL2SQLService:
 
         try:
             adapter = self._select_adapter(db_id)
-            return self._introspect_sqlite_schema(adapter)
+            return adapter.derive_schema_preview()
         except DbNotFound:
             raise
         except Exception as exc:
