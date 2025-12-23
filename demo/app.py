@@ -199,7 +199,7 @@ def build_ui() -> gr.Blocks:
                 scale=4,
             )
             debug = gr.Checkbox(
-                label="Debug (UI only)",
+                label="Debug",
                 value=False,
                 scale=1,
             )
