@@ -274,10 +274,7 @@ def nl2sql_handler(
 
     # ---- ambiguity path → 200 with clarification questions ----
     if result.ambiguous:
-        resp = ClarifyResponse(questions=(result.questions or []))
-        # Optional-but-useful: cache clarify responses too
-        cache.set(cache_key, resp.model_dump())
-        return resp
+        return ClarifyResponse(questions=(result.questions or []))
 
     # ---- error path: contract-based mapping (Phase 3) ----
     if (not result.ok) or result.error:
