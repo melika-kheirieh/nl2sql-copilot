@@ -1,5 +1,5 @@
 groups:
-# 1) Recording rules (all derived metric calculations)
+  # 1) Recording rules (all derived metric calculations)
   - name: nl2sql_derived
     interval: 15s
     rules:
@@ -83,20 +83,20 @@ groups:
 
       - alert: NL2SQLFrequentSafetyBlocks
         expr: |
-          rate(safety_blocks_total[5m]) * 60 > 5
+          rate(safety_blocks_total[5m]) * 60 > 0.5
         for: 2m
         labels:
           severity: warning
         annotations:
           summary: "Frequent safety blocks"
-          description: "More than 5 safety blocks per minute for 2 minutes."
+          description: "More than 0.5 safety blocks per minute for 2 minutes."
 
       - alert: NL2SQLVerifierFailingOften
         expr: |
-          rate(verifier_failures_total[5m]) * 60 > 5
+          rate(verifier_failures_total[5m]) * 60 > 0.5
         for: 2m
         labels:
           severity: warning
         annotations:
           summary: "Verifier failures are high"
-          description: "More than 5 verifier failures per minute for 2 minutes."
+          description: "More than 0.5 verifier failures per minute for 2 minutes."
