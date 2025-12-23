@@ -67,8 +67,12 @@ lint-fix: ## Lint and auto-fix (ruff --fix)
 typecheck: ## Type-check (mypy)
 	$(MYPY) . --exclude '^data/'
 
+.PHONY: metrics-check
+metrics-check: ## Verify Prometheus/Grafana queries match defined metrics
+	$(PY) scripts/verify_metrics_wiring.py
+
 .PHONY: qa
-qa: format lint typecheck ## Run format + lint + typecheck
+qa: format lint typecheck metrics-check ## Run format + lint + typecheck + metrics-check
 
 # ---------- Tests ----------
 .PHONY: test
