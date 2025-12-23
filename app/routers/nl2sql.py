@@ -5,7 +5,7 @@ from dataclasses import asdict, is_dataclass
 import os
 from pathlib import Path
 import uuid
-from typing import Any, Dict, Optional, Tuple, cast
+from typing import Any, Dict, Optional, cast
 import hashlib
 import logging
 
@@ -50,68 +50,12 @@ def require_api_key(key: Optional[str] = Security(api_key_header)):
         raise HTTPException(status_code=401, detail="invalid API key")
 
 
-####################################
-# ---- Simple in-memory cache for NL→SQL responses ----
-
-# Cache TTL and max size from centralized settings
-_CACHE_TTL = settings.cache_ttl_sec
-_CACHE_MAX = settings.cache_max_entries
-_CACHE: Dict[Tuple[str, str, str], Tuple[float, Dict[str, Any]]] = {}
-
-
-def _norm_q(s: str) -> str:
-    """Normalize a user query for cache key purposes."""
-    return (s or "").strip().lower()
-
-
-def _schema_key(preview: str) -> str:
-    """Hash the schema preview so we do not store huge strings in the cache key."""
-    return hashlib.md5((preview or "").encode()).hexdigest()
-
-
-def _ck(
-    db_id: Optional[str],
-    query: str,
-    schema_preview: str,
-) -> str:
-    """
-    Build a stable cache key for (db_id, query, schema_preview).
-
-    We keep the external cache API string-based, and hash the
-    potentially large schema_preview to avoid huge dictionary keys.
-    """
-    # Normalize db_id
-    db_part = db_id or "__default__"
-
-    # Build a single string seed
-    seed = f"{db_part}\n{query}\n{schema_preview}"
-
-    # Short, deterministic key
-    return hashlib.sha1(seed.encode("utf-8")).hexdigest()
-
-
-def _cache_gc(now: float) -> None:
-    """
-    Garbage-collect cache entries by TTL and max size.
-    """
-    # TTL eviction
-    for k, (ts, _) in list(_CACHE.items()):
-        if now - ts > _CACHE_TTL:
-            _CACHE.pop(k, None)
-
-    # Size eviction (naive FIFO-style)
-    while len(_CACHE) > _CACHE_MAX:
-        _CACHE.pop(next(iter(_CACHE)), None)
-
-
-####################################
-
 router = APIRouter(prefix="/nl2sql")
 
 # -------------------------------
 # Config / Defaults
 # -------------------------------
-DB_MODE = settings.db_mode.lower()  # "sqlite" or "postgres"
+DB_MODE = settings.db_mode.lower()
 
 # Runtime upload storage for SQLite DBs
 _DB_UPLOAD_DIR = settings.db_upload_dir
@@ -127,29 +71,14 @@ logger.debug(
 )
 
 
-# -------------------------------
-# Schema preview endpoint
-# -------------------------------
-
-
 @router.get("/schema")
 def schema_endpoint(
     db_id: Optional[str] = None,
     svc: NL2SQLService = Depends(get_nl2sql_service),
 ):
-    """
-    Return a lightweight schema preview string for the given DB.
-
-    - If db_id is provided, service will resolve the uploaded DB.
-    - If not, service falls back to the default DB.
-    - In postgres mode, caller must usually provide schema_preview explicitly.
-    Domain errors (AppError subclasses) are handled by the global exception handler.
-    This endpoint only wraps truly unexpected errors into a generic HTTP 500
-    """
     try:
         preview = svc.get_schema_preview(db_id=db_id, override=None)
     except AppError:
-        # Let the global AppError handler deal with it.
         raise
     except Exception as exc:
         logger.exception("Unexpected error in schema_endpoint", exc_info=exc)
@@ -176,15 +105,6 @@ def _to_dict(obj: Any) -> Any:
 
 
 def _round_trace(t: Any) -> Dict[str, Any]:
-    """
-    Normalize a trace entry (dict or StageTrace-like object) for API/UI:
-
-    - stage: str (required)
-    - duration_ms: int (rounded)
-    - summary: optional (pass-through if exists)
-    - notes: optional
-    - token_in/out, cost_usd: pass-through if present
-    """
     if isinstance(t, dict):
         stage = t.get("stage", "?")
         ms = t.get("duration_ms", 0)
@@ -275,26 +195,23 @@ def health():
     return {"status": "ok", "version": settings.app_version}
 
 
-# -------------------------------
-# Main NL2SQL endpoint
-# -------------------------------
+def _ck(db_id: Optional[str], query: str, schema_preview: str) -> str:
+    db_part = db_id or "__default__"
+    seed = f"{db_part}\n{query}\n{schema_preview}"
+    return hashlib.sha1(seed.encode("utf-8")).hexdigest()
 
 
-@router.post("", name="nl2sql_handler", dependencies=[Depends(require_api_key)])
+@router.post(
+    "",
+    name="nl2sql_handler",
+    dependencies=[Depends(require_api_key)],
+    response_model=NL2SQLResponse | ClarifyResponse,
+)
 def nl2sql_handler(
     request: NL2SQLRequest,
     svc: NL2SQLService = Depends(get_nl2sql_service),
     cache: NL2SQLCache = Depends(get_cache),
-) -> NL2SQLResponse | ClarifyResponse | Dict[str, Any]:
-    """
-    Main NL→SQL handler.
-
-    Flow:
-    - Resolve schema preview (client override or derived from DB).
-    - Check in-memory cache (db_id + query + schema hash).
-    - Run the pipeline through NL2SQLService.
-    - Map FinalResult to API response or HTTP error.
-    """
+) -> NL2SQLResponse | ClarifyResponse:
     db_id = getattr(request, "db_id", None)
 
     # ---- schema preview ----
@@ -320,7 +237,10 @@ def nl2sql_handler(
     cache_key = _ck(db_id, request.query, final_preview)
     cached_payload = cache.get(cache_key)
     if cached_payload is not None:
-        return cached_payload
+        # Cache stores dicts; convert back to response models for type safety.
+        if isinstance(cached_payload, dict) and cached_payload.get("ambiguous") is True:
+            return ClarifyResponse.model_validate(cached_payload)
+        return NL2SQLResponse.model_validate(cached_payload)
 
     # ---- pipeline execution via service ----
     try:
@@ -354,8 +274,7 @@ def nl2sql_handler(
 
     # ---- ambiguity path → 200 with clarification questions ----
     if result.ambiguous:
-        qs = result.questions or []
-        return ClarifyResponse(ambiguous=True, questions=qs)
+        return ClarifyResponse(questions=(result.questions or []))
 
     # ---- error path: contract-based mapping (Phase 3) ----
     if (not result.ok) or result.error:
