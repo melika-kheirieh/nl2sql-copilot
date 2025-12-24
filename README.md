@@ -1,7 +1,7 @@
 # NL2SQL Copilot — Safety-First, Production-Grade Text-to-SQL
 
 [![CI](https://github.com/melika-kheirieh/nl2sql-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/melika-kheirieh/nl2sql-copilot/actions/workflows/ci.yml)
-[![Docker](https://img.shields.io/badge/docker-ready-blue?logo=docker)](#)
+[![Docker](https://img.shields.io/badge/docker--compose-demo-blue?logo=docker)](docs/runbook.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A **production-oriented, multi-stage Natural Language → SQL system** built around
@@ -94,7 +94,7 @@ make demo-metrics
 ```
 
 >For a complete end-to-end setup (API, infra, metrics, dashboards, UIs),
-see [docs//runbook.md](docs//runbook.md).
+see [docs/runbook.md](docs/runbook.md).
 
 ---
 
