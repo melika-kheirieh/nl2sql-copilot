@@ -4,51 +4,9 @@
   "timezone": "browser",
   "editable": true,
   "schemaVersion": 38,
-  "version": 5,
+  "version": 6,
   "refresh": "30s",
   "panels": [
-    {
-      "id": 1,
-      "type": "timeseries",
-      "title": "Stage p95 Latency (s)",
-      "datasource": "Prometheus",
-      "targets": [
-        {
-          "expr": "nl2sql:stage_p95_ms / 1000",
-          "legendFormat": "{{stage}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green"
-              },
-              {
-                "value": 1000,
-                "color": "orange"
-              },
-              {
-                "value": 2000,
-                "color": "red"
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 0,
-        "w": 12,
-        "h": 6
-      }
-    },
     {
       "id": 2,
       "type": "stat",
@@ -94,9 +52,9 @@
         "overrides": []
       },
       "gridPos": {
-        "x": 12,
+        "x": 0,
         "y": 0,
-        "w": 6,
+        "w": 8,
         "h": 4
       }
     },
@@ -145,9 +103,9 @@
         "overrides": []
       },
       "gridPos": {
-        "x": 18,
+        "x": 8,
         "y": 0,
-        "w": 6,
+        "w": 8,
         "h": 4
       },
       "description": "Uses rate() over $__rate_interval for short-term health. With low traffic it can be noisy; prefer 'Pipeline OK Ratio (%)' for selected-window aggregate."
@@ -196,10 +154,52 @@
         }
       },
       "gridPos": {
-        "x": 12,
-        "y": 4,
-        "w": 6,
+        "x": 16,
+        "y": 0,
+        "w": 8,
         "h": 4
+      }
+    },
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Stage p95 Latency (s)",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "nl2sql:stage_p95_ms / 1000",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "value": 1000,
+                "color": "orange"
+              },
+              {
+                "value": 2000,
+                "color": "red"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 16,
+        "h": 7
       }
     },
     {
@@ -209,7 +209,7 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "100 * (nl2sql:cache_hit_ratio or vector(0))",
+          "expr": "100 * sum(increase(cache_events_total{hit=\"true\"}[$__range])) / clamp_min(sum(increase(cache_events_total[$__range])), 1)",
           "refId": "A"
         }
       ],
@@ -250,10 +250,10 @@
         "showThresholdMarkers": true
       },
       "gridPos": {
-        "x": 0,
-        "y": 6,
-        "w": 6,
-        "h": 4
+        "x": 16,
+        "y": 4,
+        "w": 8,
+        "h": 7
       }
     },
     {
@@ -281,9 +281,9 @@
         }
       },
       "gridPos": {
-        "x": 6,
-        "y": 6,
-        "w": 12,
+        "x": 0,
+        "y": 11,
+        "w": 16,
         "h": 6
       }
     },
@@ -331,10 +331,10 @@
         "overrides": []
       },
       "gridPos": {
-        "x": 12,
-        "y": 8,
-        "w": 6,
-        "h": 2
+        "x": 16,
+        "y": 11,
+        "w": 8,
+        "h": 3
       }
     },
     {
@@ -381,10 +381,10 @@
         "overrides": []
       },
       "gridPos": {
-        "x": 12,
-        "y": 10,
-        "w": 6,
-        "h": 2
+        "x": 16,
+        "y": 14,
+        "w": 8,
+        "h": 3
       }
     }
   ]

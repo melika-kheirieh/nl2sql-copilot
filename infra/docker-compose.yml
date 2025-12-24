@@ -7,71 +7,91 @@ services:
     container_name: nl2sql
     restart: unless-stopped
     env_file:
-    - ../.env
+      - ../.env
     environment:
-      OPENAI_MODEL: gpt-4o-mini
+      API_KEY: ${API_KEY:-dev-key}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
     ports:
-    - 8000:8000
+      - "8000:8000"
     networks:
-    - backend
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 10s
+      timeout: 2s
+      retries: 10
+
   prometheus:
-    image: prom/prometheus:v2.55.0
+    image: prom/prometheus:latest
     container_name: nl2sql-prom
     restart: unless-stopped
+    # Use configs (not bind mounts) to avoid Docker Desktop creating host paths / dir-vs-file traps
+    configs:
+      - source: prom_config
+        target: /etc/prometheus/prometheus.yml
+      - source: prom_rules
+        target: /etc/prometheus/rules.yml
     command:
-    - --config.file=/etc/prometheus/prometheus.yml
-    - --storage.tsdb.path=/prometheus
-    - --web.enable-lifecycle
-    volumes:
-    - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
-    - prometheus_data:/prometheus
+      - "--config.file=/etc/prometheus/prometheus.yml"
     ports:
-    - 9090:9090
+      - "9090:9090"
+    depends_on:
+      - nl2sql
     networks:
-    - backend
+      - backend
+
   grafana:
-    image: grafana/grafana-oss:11.3.0
+    image: grafana/grafana:latest
     container_name: nl2sql-grafana
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_USERS_ALLOW_SIGN_UP: 'false'
-    volumes:
-    - grafana_data:/var/lib/grafana
-    - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
-    - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
     ports:
-    - 3000:3000
+      - "3000:3000"
     depends_on:
-    - prometheus
+      - prometheus
     networks:
-    - backend
-  alertmanager:
-    image: prom/alertmanager:v0.27.0
-    container_name: nl2sql-alertmanager
-    restart: unless-stopped
-    command:
-    - --config.file=/etc/alertmanager/alertmanager.yml
-    - --storage.path=/alertmanager
+      - backend
     volumes:
-    - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-    ports:
-    - 9093:9093
-    networks:
-    - backend
-  alert-receiver:
-    build: ./alert-receiver
-    container_name: nl2sql-alert-receiver
+      - ./grafana/provisioning/datasources/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+      - ./grafana/provisioning/dashboards/dashboard.yml:/etc/grafana/provisioning/dashboards/dashboard.yml:ro
+      - ./grafana/provisioning/dashboards/nl2sql.json:/var/lib/grafana/dashboards/nl2sql.json:ro
+
+  demo-traffic:
+    image: curlimages/curl:8.10.1
+    container_name: nl2sql-demo-traffic
     restart: unless-stopped
-    ports:
-    - 9000:9000
+    profiles: ["traffic"]
+    depends_on:
+      nl2sql:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    environment:
+      API_KEY: ${API_KEY:-dev-key}
+    command: >
+      sh -lc '
+        echo "demo-traffic: warming nl2sql metrics...";
+        while true; do
+          curl -fsS http://nl2sql:8000/healthz >/dev/null 2>&1 || true;
+          curl -fsS -X POST http://nl2sql:8000/v1/query \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: ${API_KEY}" \
+            -d "{\"question\":\"List the first 10 artists.\"}" \
+            >/dev/null 2>&1 || true;
+          sleep 2;
+        done
+      '
     networks:
-    - backend
+      - backend
+
+configs:
+  prom_config:
+    file: ./prometheus/prometheus.yml
+  prom_rules:
+    file: ./prometheus/rules.yml
+
 networks:
   backend:
     driver: bridge
-volumes:
-  prometheus_data: null
-  grafana_data: null
