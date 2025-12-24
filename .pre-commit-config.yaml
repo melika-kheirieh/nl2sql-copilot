@@ -39,9 +39,16 @@ repos:
           - types-PyYAML>=6.0.12.20240808
         stages: [pre-push]
 
-  # --- Pytest: run test suite — push only (no edits) ---
+#   --- Pytest + project checks — push only (no edits) ---
   - repo: local
     hooks:
+      - id: verify-metrics-wiring
+        name: verify metrics wiring (pre-push)
+        entry: python scripts/verify_metrics_wiring.py
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
       - id: pytest-on-push
         name: pytest (pre-push)
         # If Makefile is present, keep this entry; otherwise use:
