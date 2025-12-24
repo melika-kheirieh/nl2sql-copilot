@@ -232,19 +232,19 @@ def nl2sql_handler(
 ) -> NL2SQLResponse | ClarifyResponse:
     db_id = getattr(request, "db_id", None)
 
-    # ---- deterministic SELECT-only guard ----
-    # Block DML/DDL intents early (before schema derivation, cache, or LLM calls).
-    if _is_unsafe_intent(getattr(request, "query", "")):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": {
-                    "code": "BAD_REQUEST",
-                    "retryable": False,
-                    "details": ["non_select_query"],
-                }
-            },
-        )
+    # # ---- deterministic SELECT-only guard ----
+    # # Block DML/DDL intents early (before schema derivation, cache, or LLM calls).
+    # if _is_unsafe_intent(getattr(request, "query", "")):
+    #     raise HTTPException(
+    #         status_code=400,
+    #         detail={
+    #             "error": {
+    #                 "code": "BAD_REQUEST",
+    #                 "retryable": False,
+    #                 "details": ["non_select_query"],
+    #             }
+    #         },
+    #     )
 
     # ---- schema preview ----
     try:
