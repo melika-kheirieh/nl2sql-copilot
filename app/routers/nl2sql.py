@@ -215,7 +215,7 @@ def health():
 
 def _ck(db_id: Optional[str], query: str, schema_preview: str) -> str:
     db_part = db_id or "__default__"
-    seed = f"{db_part}\n{query}\n{schema_preview}"
+    seed = f"{db_part}\n{query.strip()}"
     return hashlib.sha1(seed.encode("utf-8")).hexdigest()
 
 
