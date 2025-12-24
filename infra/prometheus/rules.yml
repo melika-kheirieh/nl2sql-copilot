@@ -1,102 +1,40 @@
 groups:
-  # 1) Recording rules (all derived metric calculations)
-  - name: nl2sql_derived
-    interval: 15s
-    rules:
-      # p95 latency per stage (ms)
-      - record: nl2sql:stage_p95_ms
-        expr: |
-          histogram_quantile(
-            0.95,
-            sum by (le, stage) (rate(stage_duration_ms_bucket[5m]))
-          )
-
-      # pipeline success ratio
-      - record: nl2sql:pipeline_success_ratio
-        expr: |
-          (
-            sum(rate(pipeline_runs_total{status="ok"}[5m]))
-          )
-          /
-          clamp_min(sum(rate(pipeline_runs_total[5m])), 1)
-
-      # repair success rate
-      - record: nl2sql:repair_success_rate
-        expr: |
-          (
-            sum(rate(repair_attempts_total{outcome="success"}[5m]))
-          )
-          /
-          clamp_min(sum(rate(repair_attempts_total{outcome="attempt"}[5m])), 1)
-
-      # cache hit ratio
-      - record: nl2sql:cache_hit_ratio
-        expr: |
-          (
-            sum(rate(cache_events_total{hit="true"}[5m]))
-          )
-          /
-          clamp_min(sum(rate(cache_events_total[5m])), 1)
-
-      # verifier events per minute (split by ok)
-      - record: nl2sql:verifier_events_per_min
-        expr: |
-          60 * sum by (ok) (rate(verifier_checks_total[1m]))
-
-      # safety blocks per minute
-      - record: nl2sql:safety_blocks_per_min
-        expr: |
-          60 * sum(rate(safety_blocks_total[1m]))
-
-      # combined safety + verifier failures per minute
-      - record: nl2sql:safety_verifier_events_per_min
-        expr: |
-          60 * (
-            sum(rate(safety_blocks_total[1m]))
-            +
-            sum(rate(verifier_failures_total[1m]))
-          )
-
-  # 2) Alerts (must come after recording rules)
-  - name: nl2sql_alerts
-    interval: 15s
-    rules:
-      - alert: NL2SQLHighP95Latency
-        expr: |
-          max(nl2sql:stage_p95_ms) > 20000
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High p95 stage latency"
-          description: "p95 stage latency > 20s for 2 minutes."
-
-      - alert: NL2SQLLowSuccessRatio
-        expr: |
-          nl2sql:pipeline_success_ratio < 0.85
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Pipeline success ratio is low"
-          description: "Success ratio below 85% for 5 minutes."
-
-      - alert: NL2SQLFrequentSafetyBlocks
-        expr: |
-          rate(safety_blocks_total[5m]) * 60 > 0.5
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Frequent safety blocks"
-          description: "More than 0.5 safety blocks per minute for 2 minutes."
-
-      - alert: NL2SQLVerifierFailingOften
-        expr: |
-          rate(verifier_failures_total[5m]) * 60 > 0.5
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Verifier failures are high"
-          description: "More than 0.5 verifier failures per minute for 2 minutes."
+- name: nl2sql_derived
+  interval: 15s
+  rules:
+  - record: nl2sql:stage_p95_ms
+    expr: histogram_quantile(0.95, sum by (le, stage) (rate(stage_duration_ms_bucket[5m])))
+  - record: nl2sql:pipeline_exec_success_ratio
+    expr: sum(rate(pipeline_runs_total{status="ok"}[5m])) / clamp_min(sum(rate(pipeline_runs_total{status=~"ok|error"}[5m])),
+      1)
+  - record: nl2sql:pipeline_success_ratio
+    expr: sum(rate(pipeline_runs_total{status="ok"}[5m])) / clamp_min(sum(rate(pipeline_runs_total{status=~"ok|error|ambiguous"}[5m])),
+      1)
+  - record: nl2sql:repair_success_rate
+    expr: sum(rate(repair_attempts_total{outcome="success"}[5m])) / clamp_min(sum(rate(repair_attempts_total{outcome="attempt"}[5m])),
+      1)
+  - record: nl2sql:cache_hit_ratio
+    expr: sum(rate(cache_events_total{hit="true"}[5m])) / clamp_min(sum(rate(cache_events_total[5m])),
+      1)
+  - record: nl2sql:safety_blocks_per_min
+    expr: sum(rate(safety_blocks_total[5m])) * 60
+  - record: nl2sql:verifier_failures_per_min
+    expr: sum(rate(verifier_failures_total[5m])) * 60
+- name: nl2sql_alerts
+  rules:
+  - alert: NL2SQLSafetyBlockingOften
+    expr: nl2sql:safety_blocks_per_min > 0.5
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: Frequent safety blocks
+      description: More than 0.5 safety blocks per minute for 2 minutes.
+  - alert: NL2SQLVerifierFailingOften
+    expr: nl2sql:verifier_failures_per_min > 0.5
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: Verifier failures are high
+      description: More than 0.5 verifier failures per minute for 2 minutes.

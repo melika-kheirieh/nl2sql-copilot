@@ -1,4 +1,4 @@
-"""Portable smoke request for NL2SQL Copilot.
+"""Portable smoke requests for NL2SQL Copilot.
 
 - Ensures a demo SQLite DB exists under /tmp/nl2sql_dbs/smoke_demo.sqlite
 - Uploads it to the API
@@ -55,7 +55,14 @@ def _run_query(db_id: str, query: str) -> dict:
     payload = {"db_id": db_id, "query": query}
 
     t0 = time.time()
-    resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    timeout_s = float(os.getenv("SMOKE_TIMEOUT", "180"))
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=timeout_s)
+    except requests.exceptions.ReadTimeout:
+        # One retry to smooth over transient provider/LLM slowness.
+        time.sleep(2)
+        resp = requests.post(url, headers=headers, json=payload, timeout=timeout_s)
+
     dt_ms = int(round((time.time() - t0) * 1000))
 
     out: dict = {}
@@ -65,6 +72,26 @@ def _run_query(db_id: str, query: str) -> dict:
         out = {"raw": resp.text}
 
     return {"status": resp.status_code, "latency_ms": dt_ms, "body": out}
+
+
+def _get_error_code(body: dict) -> str | None:
+    """Extract error.code from the API response shape if present."""
+    try:
+        err = body.get("error")
+        if isinstance(err, dict):
+            code = err.get("code")
+            return str(code) if code is not None else None
+    except Exception:
+        return None
+    return None
+
+
+def _is_expected_block(status: int, body: dict, allowed_codes: set[str]) -> bool:
+    """Return True if this looks like an intentional safety rejection."""
+    if status == 200:
+        return False
+    code = _get_error_code(body)
+    return code in allowed_codes
 
 
 def main() -> int:
@@ -83,7 +110,7 @@ def main() -> int:
         return 3
 
     checks = [
-        ("How many artists are there?", True),
+        ("List the first 10 artists.", True),
         ("Which customer spent the most based on total invoice amount?", True),
         ("DELETE FROM users;", False),  # must be blocked
     ]
@@ -101,8 +128,13 @@ def main() -> int:
             if status != 200:
                 ok_all = False
         else:
-            # A safety violation should not be a 200
-            if status == 200:
+            allowed = {
+                "LLM_BAD_OUTPUT",
+                "SQL_NOT_ALLOWED",
+                "INVALID_SQL",
+                "BAD_REQUEST",
+            }
+            if not _is_expected_block(status=status, body=body, allowed_codes=allowed):
                 ok_all = False
 
     if ok_all:

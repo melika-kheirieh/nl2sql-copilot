@@ -3,10 +3,10 @@ apiVersion: 1
 providers:
   - name: "NL2SQL Dashboards"
     orgId: 1
-    folder: ""
+    folder: "NL2SQL"
     type: file
     disableDeletion: true
     editable: false
     updateIntervalSeconds: 10
     options:
-      path: /etc/grafana/provisioning/dashboards/nl2sql
+      path: /etc/grafana/provisioning/dashboards
