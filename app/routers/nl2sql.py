@@ -8,6 +8,7 @@ import uuid
 from typing import Any, Dict, Optional, cast
 import hashlib
 import logging
+import re
 
 # --- Third-party ---
 from fastapi import APIRouter, Depends, HTTPException, Security, UploadFile, File
@@ -93,6 +94,23 @@ def schema_endpoint(
 # -------------------------------
 # Helpers
 # -------------------------------
+
+
+_DML_DDL_RE = re.compile(
+    r"^\s*(delete|update|insert|drop|alter|truncate|create|replace)\b", re.IGNORECASE
+)
+
+
+def _is_unsafe_intent(query: str) -> bool:
+    """Return True if the user query is clearly a non-SELECT intent.
+
+    This is a lightweight guard (not a full SQL parser) used to enforce SELECT-only
+    behavior deterministically before running the pipeline.
+    """
+    q = (query or "").strip()
+    if not q:
+        return False
+    return bool(_DML_DDL_RE.match(q))
 
 
 def _to_dict(obj: Any) -> Any:
@@ -213,6 +231,20 @@ def nl2sql_handler(
     cache: NL2SQLCache = Depends(get_cache),
 ) -> NL2SQLResponse | ClarifyResponse:
     db_id = getattr(request, "db_id", None)
+
+    # ---- deterministic SELECT-only guard ----
+    # Block DML/DDL intents early (before schema derivation, cache, or LLM calls).
+    if _is_unsafe_intent(getattr(request, "query", "")):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "code": "BAD_REQUEST",
+                    "retryable": False,
+                    "details": ["non_select_query"],
+                }
+            },
+        )
 
     # ---- schema preview ----
     try:

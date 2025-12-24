@@ -147,6 +147,11 @@ grafana-ready: ## Check Grafana is reachable
 	  echo "👉 Start infra: make infra-up"; \
 	  exit 2 )
 
+.PHONY: infra-status
+infra-status: ## Quick infra health check (containers + Prometheus readiness)
+	@$(MAKE) infra-ps
+	@echo
+	@curl -fsS "http://127.0.0.1:9090/-/ready" >/dev/null && echo "PROM READY ✅" || (echo "PROM NOT READY ❌" && exit 2)
 
 # ---------- Smoke & Demo ----------
 API_BASE ?= http://$(APP_HOST):$(APP_PORT)
