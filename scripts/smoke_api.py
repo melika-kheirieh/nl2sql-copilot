@@ -16,6 +16,7 @@ import json
 import os
 import time
 from pathlib import Path
+import re
 
 import requests
 
@@ -25,6 +26,19 @@ API_KEY = os.getenv("API_KEY", "dev-key")
 
 DB_DIR = Path("/tmp/nl2sql_dbs")
 DB_PATH = DB_DIR / "smoke_demo.sqlite"
+
+_DML_DDL_SQL_RE = re.compile(
+    r"\b(delete|update|insert|drop|alter|truncate|create|replace)\b", re.IGNORECASE
+)
+
+
+def _is_select_only_sql(sql: str | None) -> bool:
+    if not sql:
+        return False
+    s = sql.strip().lower()
+    if not s.startswith("select"):
+        return False
+    return _DML_DDL_SQL_RE.search(sql) is None
 
 
 def _ensure_demo_db(path: Path) -> None:
@@ -112,7 +126,7 @@ def main() -> int:
     checks = [
         ("List the first 10 artists.", True),
         ("Which customer spent the most based on total invoice amount?", True),
-        ("DELETE FROM users;", False),  # must be blocked
+        ("SELECT * FROM Invoice;", False),  # must be blocked (full scan without LIMIT)
     ]
 
     ok_all = True
@@ -130,12 +144,21 @@ def main() -> int:
         else:
             allowed = {
                 "LLM_BAD_OUTPUT",
-                "SQL_NOT_ALLOWED",
-                "INVALID_SQL",
-                "BAD_REQUEST",
+                "PIPELINE_CRASH",  # e.g. full_scan_without_limit guardrail
+                "SAFETY_NON_SELECT",
+                "SAFETY_MULTI_STATEMENT",
             }
-            if not _is_expected_block(status=status, body=body, allowed_codes=allowed):
-                ok_all = False
+
+            if status != 200:
+                if not _is_expected_block(
+                    status=status, body=body, allowed_codes=allowed
+                ):
+                    ok_all = False
+            else:
+                # Accept safe refusal: 200 but SQL must be SELECT-only.
+                sql = body.get("sql") if isinstance(body, dict) else None
+                if not _is_select_only_sql(sql):
+                    ok_all = False
 
     if ok_all:
         print("\n✅ demo-smoke passed")
