@@ -86,6 +86,7 @@ PROMQL_COMMON_LABEL_VALUES = {
     "failed",
     "ok",
     "error",
+    "ambiguous",
     "true",
     "false",
 }
