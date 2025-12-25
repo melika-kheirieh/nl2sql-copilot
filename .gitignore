@@ -83,7 +83,9 @@ data/uploads/
 # Spider dataset (do not commit raw data)
 # Keep a README for instructions if you want
 # --------------------
-data/spider/
+data/spider/**
+
+# But keep documentation
 !data/spider/README.md
 
 # --------------------

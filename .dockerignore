@@ -75,7 +75,10 @@ data/uploads/
 # --------------------
 # Spider dataset (exclude from image context)
 # --------------------
-data/spider/
+data/spider/**
+
+# But keep documentation
+!data/spider/README.md
 
 # --------------------
 # Temporary files
