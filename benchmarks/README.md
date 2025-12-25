@@ -10,29 +10,33 @@ Evaluation is intentionally split into three layers with increasing cost and fid
 
 ## 1) Smoke Evaluation (API-level)
 
-**Purpose**
-- End-to-end sanity check of the running system
-- Verify API health, pipeline wiring, and error handling
-- Ensure metrics are emitted correctly
+### Purpose
 
-**Characteristics**
-- Very fast
-- Low cost
-- Deterministic
-- CI-friendly
+* End-to-end sanity check of the running system
+* Verify API health, pipeline wiring, and error handling
+* Ensure the **metrics endpoint is healthy and core metrics are exposed**
 
-**What it validates**
-- API boot & health (`/healthz`)
-- Full pipeline execution (detector → planner → generator → safety → executor → verifier)
-- Error paths (e.g. blocked full-table scans)
-- Metrics emission
+### Characteristics
 
-**Command**
+* Very fast
+* Low cost
+* Deterministic
+* CI-friendly
+
+### What it validates
+
+* API boot & health (`/healthz`)
+* Full pipeline execution (detector → planner → generator → safety → executor → verifier)
+* Error paths (e.g. blocked full-table scans)
+* **Metrics endpoint and core metrics exposure**
+
+### Command
+
 ```bash
 make demo-smoke
-````
+```
 
-**Notes**
+### Notes
 
 * `make demo-up` only starts the demo stack (API + Prometheus + Grafana).
 * `make demo-smoke` is the actual API-level smoke test that issues queries
@@ -42,31 +46,31 @@ make demo-smoke
 
 ## 2) Eval Lite (Pipeline-level, Demo DB)
 
-**Purpose**
+### Purpose
 
 * Validate semantic correctness of the pipeline on a small, controlled database
 * Catch regressions in planning, SQL generation, safety, and verification logic
 
-**Characteristics**
+### Characteristics
 
 * Fast
 * Stable
 * No external datasets
 * CI-friendly
 
-**Dataset**
+### Dataset
 
 * Built-in demo database (`data/demo.db`)
 * Small, deterministic schema
 
-**What it measures**
+### What it measures
 
 * SQL validity
 * Pipeline success vs failure
 * Safety guardrails (e.g. full scans, missing limits)
 * Repair and verification behavior
 
-**What it explicitly does NOT measure**
+### What it explicitly does NOT measure
 
 * Benchmark accuracy against gold labels
 * Cross-domain generalization
@@ -74,7 +78,7 @@ make demo-smoke
 This is an **intentional design choice** to keep Eval Lite stable, repeatable,
 and suitable for automated checks.
 
-**Command**
+### Command
 
 ```bash
 make eval-smoke
@@ -84,30 +88,30 @@ make eval-smoke
 
 ## 3) Eval Pro (Spider)
 
-**Purpose**
+### Purpose
 
 * Research-oriented evaluation against a standard NL2SQL benchmark
 * Measure execution accuracy and SQL correctness
 
-**Characteristics**
+### Characteristics
 
 * Expensive
 * Slow
 * Non-deterministic
 * Not CI-friendly
 
-**Dataset**
+### Dataset
 
 * Spider benchmark (not committed to the repo)
 
-**Usage**
+### Usage
 
 ```bash
 make eval-pro-smoke   # small subset
 make eval-pro         # full evaluation
 ```
 
-**Notes**
+### Notes
 
 * This layer is **optional** and intended for deeper analysis.
 * It is not part of the default development loop.
@@ -119,13 +123,13 @@ make eval-pro         # full evaluation
 
 A Streamlit-based UI is provided to inspect benchmark results visually.
 
-**Command**
+### Command
 
 ```bash
 make bench-ui
 ```
 
-**Features**
+### Features
 
 * Load and inspect stored evaluation results
 * Compare runs
@@ -137,7 +141,7 @@ make bench-ui
 
 Evaluation results and plots are stored under:
 
-```
+```text
 benchmarks/results/
 ```
 
