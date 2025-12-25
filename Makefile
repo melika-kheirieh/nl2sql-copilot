@@ -7,6 +7,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 # ---------- Config ----------
+-include .env
 VENV_DIR ?= .venv
 
 PY      ?= $(if $(wildcard $(VENV_DIR)/bin/python),$(VENV_DIR)/bin/python,python3)
@@ -23,9 +24,9 @@ DEV_PORT ?= 8001
 PORT ?= 8501
 
 API_BASE ?= http://$(APP_HOST):$(APP_PORT)
-API_KEY  ?= dev-key
+API_KEY ?= $(OPENAI_API_KEY)
+API_KEY ?= $(PROXY_API_KEY)
 export API_KEY
-
 PROMETHEUS_URL ?= http://127.0.0.1:9090
 GRAFANA_URL    ?= http://127.0.0.1:3000
 
@@ -94,7 +95,7 @@ bench-ui: ## Run Streamlit benchmark dashboard
 DEMO_DB ?= $(if $(wildcard data/demo.db),data/demo.db,/tmp/nl2sql_dbs/smoke_demo.sqlite)
 
 .PHONY: eval-smoke
-eval-smoke: ## Run direct pipeline smoke eval on demo DB (no Spider needed)
+eval-smoke: require-api-key ## Run direct pipeline smoke eval on demo DB (no Spider needed)
 	PYTHONPATH=$$PWD \
 	PYTEST_CURRENT_TEST=1 \
 	python benchmarks/eval_lite.py --db-path $(DEMO_DB)
@@ -104,12 +105,12 @@ EVAL_PRO_LIMIT ?= 200
 EVAL_PRO_SMOKE_LIMIT ?= 20
 
 .PHONY: eval-pro-smoke
-eval-pro-smoke: ## Run Spider eval-pro (smoke preset)
+eval-pro-smoke: require-api-key ## Run Spider eval-pro (smoke preset)
 	PYTHONPATH=$$PWD \
 	python benchmarks/eval_spider_pro.py --spider --split $(SPIDER_SPLIT) --limit $(EVAL_PRO_SMOKE_LIMIT)
 
 .PHONY: eval-pro
-eval-pro: ## Run Spider eval-pro (default preset)
+eval-pro: require-api-key ## Run Spider eval-pro (default preset)
 	PYTHONPATH=$$PWD \
 	python benchmarks/eval_spider_pro.py --spider --split $(SPIDER_SPLIT) --limit $(EVAL_PRO_LIMIT)
 
@@ -118,9 +119,14 @@ plot-pro: ## Plot latest Spider eval-pro results (PNG artifacts)
 	PYTHONPATH=$$PWD \
 	python benchmarks/plot_results.py
 
+# ---------- Guards ----------
+.PHONY: require-api-key
+require-api-key:
+	@test -n "$$API_KEY" || (echo "API_KEY not found (env or .env). Set API_KEY and retry." 1>&2; exit 2)
+
 # ---------- DEMO (Docker-first, SAFE) ----------
 .PHONY: demo-up
-demo-up: ## Start DEMO stack (Docker: nl2sql + Prometheus + Grafana)
+demo-up: require-api-key ## Start DEMO stack (Docker: nl2sql + Prometheus + Grafana)
 	$(MAKE) infra-up
 	$(MAKE) prom-ready
 	$(MAKE) grafana-ready
@@ -135,9 +141,9 @@ demo-down: ## Stop demo stack (including traffic)
 	$(MAKE) infra-down
 
 .PHONY: demo-cache-showcase
-demo-cache-showcase: ## Generate mixed traffic with repeats to show cache hits in Grafana
+demo-cache-showcase: require-api-key ## Generate mixed traffic with repeats to show cache hits in Grafana
 	@API_BASE=$${API_BASE:-http://127.0.0.1:8000} \
-	API_KEY=$${API_KEY:-dev-key} \
+	API_KEY=$${API_KEY} \
 	DB_PATH=$${DB_PATH:-/tmp/nl2sql_dbs/smoke_demo.sqlite} \
 	bash scripts/demo_cache_showcase.sh
 
@@ -150,11 +156,11 @@ demo-zero:
 	rm -rf /tmp/nl2sql_dbs || true
 
 # Reproducible screenshot workload (cold start -> traffic -> cache hits)
-demo-screenshot: demo-zero infra-up
+demo-screenshot: require-api-key demo-zero infra-up
 	# wait until API is actually responding (avoid "connection reset by peer")
 	@until curl -fsS http://127.0.0.1:8000/healthz >/dev/null; do sleep 0.5; done
-	API_BASE="http://127.0.0.1:8000" API_KEY="dev-key" $(MAKE) demo-smoke
-	API_BASE="http://127.0.0.1:8000" API_KEY="dev-key" \
+	API_BASE="http://127.0.0.1:8000" API_KEY="$(API_KEY)" $(MAKE) demo-smoke
+	API_BASE="http://127.0.0.1:8000" API_KEY="$(API_KEY)" \
 	DB_PATH="/tmp/nl2sql_dbs/smoke_demo.sqlite" PROM_BASE="http://127.0.0.1:9090" \
 	python3 scripts/demo_cache_showcase.py
 
@@ -213,7 +219,7 @@ grafana-ready: ## Check Grafana readiness
 
 # ---------- Smoke / Metrics ----------
 .PHONY: demo-smoke
-demo-smoke: ## Run API smoke (Docker demo)
+demo-smoke: require-api-key ## Run API smoke (Docker demo)
 	API_BASE="$(API_BASE)" API_KEY="$(API_KEY)" \
 	$(PY) scripts/smoke_api.py
 
