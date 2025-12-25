@@ -5,7 +5,7 @@ This project provides three evaluation layers: **Smoke**, **Eval Lite**, and **E
 ## 1) Smoke (API-level)
 - **Purpose:** system health check + basic metrics wiring
 - **Files:** `scripts/smoke_run.py`, `scripts/smoke_metrics.sh`
-- **Command:** `make demo`
+- **Command:** `make demo-up`
 
 ## 2) Eval Lite (Direct pipeline)
 - **Purpose:** engineering signals (end-to-end latency, success rate, repair usage) without relying on gold SQL

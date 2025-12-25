@@ -1,7 +1,5 @@
-# (Generated patch) UX: guided full bring-up + fail-fast Prometheus readiness for demo-metrics
 # ==============================================================
-# Makefile — NL2SQL Copilot
-# Practical, low-drift, but not underpowered.
+# Makefile — NL2SQL Copilot (SAFE / Docker-first Demo)
 # ==============================================================
 SHELL := /bin/bash
 .ONESHELL:
@@ -9,6 +7,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 # ---------- Config ----------
+-include .env
 VENV_DIR ?= .venv
 
 PY      ?= $(if $(wildcard $(VENV_DIR)/bin/python),$(VENV_DIR)/bin/python,python3)
@@ -16,104 +15,171 @@ PIP     ?= $(if $(wildcard $(VENV_DIR)/bin/pip),$(VENV_DIR)/bin/pip,pip)
 UVICORN ?= $(if $(wildcard $(VENV_DIR)/bin/uvicorn),$(VENV_DIR)/bin/uvicorn,uvicorn)
 RUFF    ?= $(if $(wildcard $(VENV_DIR)/bin/ruff),$(VENV_DIR)/bin/ruff,ruff)
 MYPY    ?= $(if $(wildcard $(VENV_DIR)/bin/mypy),$(VENV_DIR)/bin/mypy,mypy)
-PYTEST  ?= $(if $(wildcard $(VENV_DIR)/bin/pytest),$(VENV_DIR)/bin/pytest,pytest)
+STREAMLIT ?= $(if $(wildcard $(VENV_DIR)/bin/streamlit),$(VENV_DIR)/bin/streamlit,streamlit)
 
 APP_HOST ?= 127.0.0.1
 APP_PORT ?= 8000
+DEV_PORT ?= 8001
 
-INFRA_COMPOSE ?= infra/docker-compose.yml
-PROM_CONFIG   ?= infra/prometheus/prometheus.yml
-PROM_RULES    ?= infra/prometheus/rules.yml
+PORT ?= 8501
 
-# API key used by scripts/smoke_*. Default aligns with infra docker-compose env.
-API_KEY ?= dev-key
+API_BASE ?= http://$(APP_HOST):$(APP_PORT)
+API_KEY ?= $(OPENAI_API_KEY)
+API_KEY ?= $(PROXY_API_KEY)
+export API_KEY
+APP_API_KEY ?= $(API_KEYS)
+APP_API_KEY ?= dev-key
+export APP_API_KEY
+
+PROMETHEUS_URL ?= http://127.0.0.1:9090
+GRAFANA_URL    ?= http://127.0.0.1:3000
+
+INFRA_COMPOSE ?= $(if $(wildcard infra/docker-compose.yml),infra/docker-compose.yml,docker-compose.yml)
+
+PROM_CONFIG ?= prometheus.yml
+RULES_FILE  ?= rules.yml
 
 # ---------- Help ----------
 .PHONY: help
 help: ## Show available targets
-	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "\033[36m%-24s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sort
+	@grep -E '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) \
+	| awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
 
-# ---------- Virtualenv / deps ----------
+# ---------- Python env ----------
 .PHONY: venv
-venv: ## Create local venv at .venv
+venv: ## Create venv
 	python3 -m venv $(VENV_DIR)
-	$(PY) -m pip install --upgrade pip
 
 .PHONY: install
-install: ## Install project dependencies into the venv
+install: ## Install project dependencies
 	$(PIP) install -r requirements.txt
-
-.PHONY: install-dev
-install-dev: ## Install dev dependencies (if you have a requirements-dev.txt)
-	@if [[ -f requirements-dev.txt ]]; then \
-		$(PIP) install -r requirements-dev.txt; \
-	else \
-		echo "requirements-dev.txt not found; skipping."; \
-	fi
 
 # ---------- Quality ----------
 .PHONY: format
-format: ## Format code (ruff format)
+format: ## Format code
 	$(RUFF) format .
 
 .PHONY: lint
-lint: ## Lint (ruff)
+lint: ## Lint code
 	$(RUFF) check .
 
-.PHONY: lint-fix
-lint-fix: ## Lint and auto-fix (ruff --fix)
-	$(RUFF) check . --fix
-
 .PHONY: typecheck
-typecheck: ## Type-check (mypy)
+typecheck: ## Typecheck
 	$(MYPY) . --exclude '^data/'
+
+.PHONY: test
+test: ## Run tests
+	PYTHONPATH=$$PWD pytest -qq
+
+.PHONY: cov
+cov: ## Run tests with coverage (HTML + terminal)
+	PYTHONPATH=$$PWD pytest -qq --cov=app --cov-report=term-missing --cov-report=html
 
 .PHONY: metrics-check
 metrics-check: ## Verify Prometheus rules + Grafana dashboards match defined metrics
 	$(PY) scripts/verify_metrics_wiring.py
 
 .PHONY: qa
-qa: format lint typecheck metrics-check ## Run format + lint + typecheck + metrics-check
+qa: ## format + lint + typecheck + test + metrics-check
+	$(MAKE) format lint typecheck test metrics-check
 
-# ---------- Tests ----------
-.PHONY: test
-test: ## Run unit tests
-	PYTHONPATH=$$PWD $(PYTEST) -qq
-
-.PHONY: test-all
-test-all: ## Run full test suite (unit + extras)
-	PYTHONPATH=$$PWD $(PYTEST) -qq
-
-# ---------- App (local) ----------
-.PHONY: run
-run: ## Run API locally on $(APP_HOST):$(APP_PORT)
-	$(UVICORN) app.main:application --host $(APP_HOST) --port $(APP_PORT)
-
-.PHONY: run-reload
-run-reload: ## Run API locally with auto-reload
-	$(UVICORN) app.main:application --reload --host $(APP_HOST) --port $(APP_PORT)
-
-# ---------- Prometheus ----------
-.PHONY: prom-check
-prom-check: ## Validate Prometheus config/rules (local promtool or Docker fallback)
-	@if command -v promtool >/dev/null 2>&1; then \
-		echo "Running promtool locally..."; \
-		echo "Checking $(PROM_RULES)"; \
-		promtool check rules $(PROM_RULES); \
-		echo; \
-		echo "Checking $(PROM_CONFIG)"; \
-		promtool check config $(PROM_CONFIG); \
+.PHONY: bench-ui
+bench-ui: ## Run Streamlit benchmark dashboard
+	@set -e; \
+	if [ -f ui/benchmark_app.py ]; then \
+		PYTHONPATH=$$PWD $(STREAMLIT) run ui/benchmark_app.py --server.port $(PORT); \
+	elif [ -f benchmarks/bench_ui.py ]; then \
+		PYTHONPATH=$$PWD $(STREAMLIT) run benchmarks/bench_ui.py --server.port $(PORT); \
 	else \
-		echo "promtool not found; using Docker image prom/prometheus for checks..."; \
-		docker run --rm -v "$$PWD:/work" -w /work prom/prometheus:latest \
-			promtool check rules $(PROM_RULES); \
-		docker run --rm -v "$$PWD:/work" -w /work prom/prometheus:latest \
-			promtool check config $(PROM_CONFIG); \
+		echo "❌ No Streamlit entrypoint found. Expected ui/benchmark_app.py"; \
+		exit 1; \
 	fi
+
+# ---------- Benchmarks / Evaluation ----------
+DEMO_DB ?= $(if $(wildcard data/demo.db),data/demo.db,/tmp/nl2sql_dbs/smoke_demo.sqlite)
+
+.PHONY: eval-smoke
+eval-smoke: require-api-key ## Run direct pipeline smoke eval on demo DB (no Spider needed)
+	PYTHONPATH=$$PWD \
+	PYTEST_CURRENT_TEST=1 \
+	python benchmarks/eval_lite.py --db-path $(DEMO_DB)
+
+SPIDER_SPLIT ?= dev
+EVAL_PRO_LIMIT ?= 200
+EVAL_PRO_SMOKE_LIMIT ?= 20
+
+.PHONY: eval-pro-smoke
+eval-pro-smoke: require-api-key ## Run Spider eval-pro (smoke preset)
+	PYTHONPATH=$$PWD \
+	python benchmarks/eval_spider_pro.py --spider --split $(SPIDER_SPLIT) --limit $(EVAL_PRO_SMOKE_LIMIT)
+
+.PHONY: eval-pro
+eval-pro: require-api-key ## Run Spider eval-pro (default preset)
+	PYTHONPATH=$$PWD \
+	python benchmarks/eval_spider_pro.py --spider --split $(SPIDER_SPLIT) --limit $(EVAL_PRO_LIMIT)
+
+.PHONY: plot-pro
+plot-pro: ## Plot latest Spider eval-pro results (PNG artifacts)
+	PYTHONPATH=$$PWD \
+	python benchmarks/plot_results.py
+
+# ---------- Guards ----------
+.PHONY: require-api-key
+require-api-key:
+	@test -n "$$API_KEY" || (echo "API_KEY not found (env or .env). Set API_KEY and retry." 1>&2; exit 2)
+
+# ---------- DEMO (Docker-first, SAFE) ----------
+.PHONY: demo-up
+demo-up: require-api-key ## Start DEMO stack (Docker: nl2sql + Prometheus + Grafana)
+	$(MAKE) infra-up
+	$(MAKE) prom-ready
+	$(MAKE) grafana-ready
+	@echo "✅ Demo stack is up"
+	@echo "API:        http://127.0.0.1:8000"
+	@echo "Grafana:    http://127.0.0.1:3000"
+	@echo "Prometheus:http://127.0.0.1:9090"
+
+.PHONY: demo-down
+demo-down: ## Stop demo stack (including traffic)
+	$(MAKE) demo-traffic-down
+	$(MAKE) infra-down
+
+.PHONY: demo-cache-showcase
+demo-cache-showcase: require-api-key ## Generate mixed traffic with repeats to show cache hits in Grafana
+	@API_BASE=$${API_BASE:-http://127.0.0.1:8000} \
+	API_KEY=$${API_KEY} \
+	DB_PATH=$${DB_PATH:-/tmp/nl2sql_dbs/smoke_demo.sqlite} \
+	bash scripts/demo_cache_showcase.sh
+
+.PHONY: demo-zero demo-screenshot
+
+# Reset infra + temp demo DBs to get a "cold start" screenshot
+demo-zero:
+	docker rm -f nl2sql-demo-traffic >/dev/null 2>&1 || true
+	docker compose -f infra/docker-compose.yml down -v --remove-orphans || true
+	rm -rf /tmp/nl2sql_dbs || true
+
+# Reproducible screenshot workload (cold start -> traffic -> cache hits)
+demo-screenshot: require-api-key demo-zero infra-up
+	# wait until API is actually responding (avoid "connection reset by peer")
+	@until curl -fsS http://127.0.0.1:8000/healthz >/dev/null; do sleep 0.5; done
+	API_BASE="http://127.0.0.1:8000" API_KEY="$(API_KEY)" $(MAKE) demo-smoke
+	API_BASE="http://127.0.0.1:8000" API_KEY="$(API_KEY)" \
+	DB_PATH="/tmp/nl2sql_dbs/smoke_demo.sqlite" PROM_BASE="http://127.0.0.1:9090" \
+	python3 scripts/demo_cache_showcase.py
+
+# ---------- Local DEV (explicit, separate) ----------
+.PHONY: dev-up
+dev-up: ## Start API locally (DEV ONLY, separate from demo)
+	$(UVICORN) app.main:application --host 127.0.0.1 --port $(DEV_PORT)
 
 # ---------- Infra (Docker Compose) ----------
 .PHONY: infra-up
-infra-up: ## Start infra stack (Prometheus/Grafana/Alertmanager + nl2sql)
+infra-up: ## Start infra stack (no build)
+	docker compose -f $(INFRA_COMPOSE) up -d
+
+.PHONY: infra-up-build
+infra-up-build: ## Start infra stack with build
 	docker compose -f $(INFRA_COMPOSE) up -d --build
 
 .PHONY: infra-down
@@ -121,154 +187,69 @@ infra-down: ## Stop infra stack
 	docker compose -f $(INFRA_COMPOSE) down
 
 .PHONY: infra-restart
-infra-restart: ## Restart infra stack
+infra-restart: ## Restart infra stack (no build)
 	docker compose -f $(INFRA_COMPOSE) down
-	docker compose -f $(INFRA_COMPOSE) up -d --build
+	docker compose -f $(INFRA_COMPOSE) up -d
 
 .PHONY: infra-ps
-infra-ps: ## Show running containers for the infra stack
+infra-ps: ## Show infra containers
 	docker compose -f $(INFRA_COMPOSE) ps
 
-.PHONY: infra-logs
-infra-logs: ## Tail infra logs
-	docker compose -f $(INFRA_COMPOSE) logs -f --tail=200
+# ---------- Demo traffic ----------
+.PHONY: demo-traffic-up
+demo-traffic-up: ## Start demo traffic warmer (Docker-only)
+	docker compose -f $(INFRA_COMPOSE) --profile traffic up -d demo-traffic
+
+.PHONY: demo-traffic-down
+demo-traffic-down: ## Stop demo traffic warmer
+	docker compose -f $(INFRA_COMPOSE) --profile traffic stop demo-traffic || true
+
+# ---------- Health / Metrics ----------
+.PHONY: curl-health
+curl-health: ## Check API health (Docker demo)
+	curl -fsS $(API_BASE)/healthz >/dev/null && echo "✅ API healthy"
+
+.PHONY: curl-metrics
+curl-metrics: ## Peek metrics
+	curl -fsS $(API_BASE)/metrics | head -n 40
 
 .PHONY: prom-ready
-prom-ready: ## Check Prometheus is reachable (for demo-metrics, dashboards, etc.)
-	@curl -fsS "$(PROMETHEUS_URL)/-/ready" >/dev/null || ( \
-	  echo "❌ Prometheus not reachable at $(PROMETHEUS_URL)"; \
-	  echo "👉 Start infra: make infra-up"; \
-	  exit 2 )
+prom-ready: ## Check Prometheus readiness
+	curl -fsS $(PROMETHEUS_URL)/-/ready >/dev/null
 
 .PHONY: grafana-ready
-grafana-ready: ## Check Grafana is reachable
-	@curl -fsS "http://127.0.0.1:3000/api/health" >/dev/null || ( \
-	  echo "❌ Grafana not reachable at http://127.0.0.1:3000"; \
-	  echo "👉 Start infra: make infra-up"; \
-	  exit 2 )
+grafana-ready: ## Check Grafana readiness
+	@echo "Waiting for Grafana..."
+	@i=0; \
+	while [ $$i -lt 40 ]; do \
+	  if curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1; then \
+	    echo "✅ Grafana ready"; exit 0; \
+	  fi; \
+	  i=$$((i+1)); \
+	  sleep 1; \
+	done; \
+	echo "❌ Grafana not ready after 40s" 1>&2; \
+	docker logs nl2sql-grafana --tail 120 || true; \
+	exit 2
 
-.PHONY: infra-status
-infra-status: ## Quick infra health check (containers + Prometheus readiness)
-	@$(MAKE) infra-ps
-	@echo
-	@curl -fsS "http://127.0.0.1:9090/-/ready" >/dev/null && echo "PROM READY ✅" || (echo "PROM NOT READY ❌" && exit 2)
-
-# ---------- Smoke & Demo ----------
-API_BASE ?= http://$(APP_HOST):$(APP_PORT)
-PROMETHEUS_URL ?= http://127.0.0.1:9090
-
-.PHONY: smoke
-smoke: ## Run full smoke (API + Prometheus validation)
-	@$(MAKE) demo-smoke
-	@$(MAKE) demo-metrics
-
-.PHONY: demo
-demo: ## Print steps to run the local demo (API + UI)
-	@echo "Local demo (full stack, 3+ terminals):"
-	@echo
-	@echo "Terminal A (Infra: Prometheus/Grafana/Alertmanager):"
-	@echo "  make infra-up"
-	@echo "  make infra-ps"
-	@echo
-	@echo "Terminal B (API - blocking):"
-	@echo "  make demo-up"
-	@echo
-	@echo "Terminal C (Smoke + metrics):"
-	@echo "  make demo-smoke"
-	@echo "  make demo-metrics"
-	@echo
-	@echo "Terminal D (UI):"
-	@echo "  make demo-ui-up"
-	@echo "  make bench-ui"
-	@echo
-	@echo "Optional checks:"
-	@echo "  make demo-smoke     # quick API sanity (portable)"
-	@echo "  make demo-metrics   # Prometheus validation (requires Prometheus at $$PROMETHEUS_URL)"
-
-.PHONY: demo-bootstrap
-demo-bootstrap: ## Start infra, then print the exact next steps (API is blocking)
-	@$(MAKE) infra-up
-	@echo
-	@echo "Next:"
-	@echo "  Terminal B: make demo-up"
-	@echo "  Terminal C: make demo-smoke && make demo-metrics"
-	@echo "  Optional:  make demo-ui-up (Gradio) / make bench-ui (Streamlit)"
-
-.PHONY: demo-up
-demo-up: ## Start the API locally (blocking)
-	$(UVICORN) app.main:application --host $(APP_HOST) --port $(APP_PORT)
-
-.PHONY: demo-ui-up
-demo-ui-up: ## Run Gradio UI locally (talks to the API)
-	API_BASE=$(API_BASE) \
-	API_KEY=$${API_KEY:-dev-key} \
-	$(PY) demo/app.py
-
+# ---------- Smoke / Metrics ----------
 .PHONY: demo-smoke
-demo-smoke: ## Quick API smoke (portable; no jq required)
-	API_BASE=$(API_BASE) \
-	API_KEY=$${API_KEY:-dev-key} \
+demo-smoke: require-api-key ## Run API smoke (Docker demo)
+	API_BASE="$(API_BASE)" API_KEY="$(APP_API_KEY)" \
 	$(PY) scripts/smoke_api.py
 
 .PHONY: demo-metrics
-demo-metrics: prom-ready ## Validate Prometheus signals after demo-smoke (portable; no jq required)
-	API_BASE=$(API_BASE) \
-	API_KEY=$${API_KEY:-dev-key} \
-	PROMETHEUS_URL=$${PROMETHEUS_URL:-$(PROMETHEUS_URL)} \
-	$(PY) scripts/smoke_metrics.py
+demo-metrics: prom-ready ## Validate Prometheus signals
+	curl -fsS "$(PROMETHEUS_URL)/api/v1/query" \
+		--data-urlencode 'query=cache_events_total' | head -c 2000; echo
 
-# ---------- Cleanup ----------
-.PHONY: clean
-clean: ## Remove python cache artifacts
-	rm -rf .pytest_cache .mypy_cache .ruff_cache
-	find . -type d -name "__pycache__" -print0 | xargs -0 rm -rf
-
+# ---------- Clean ----------
 .PHONY: clean-docker
-clean-docker: ## Stop infra and remove volumes (careful)
-	docker compose -f $(INFRA_COMPOSE) down -v
+clean-docker: ## Remove docker artifacts (careful)
+	docker system prune -f
 
-# ---------- Convenience ----------
-.PHONY: curl-health
-curl-health: ## Hit /healthz on the local API
-	curl -fsS "http://$(APP_HOST):$(APP_PORT)/healthz" && echo
-
-.PHONY: curl-metrics
-curl-metrics: ## Hit /metrics on the local API
-	curl -fsS "http://$(APP_HOST):$(APP_PORT)/metrics" | head -n 30
-
-
-# -----------------------------
-# Benchmarks / Evaluation
-
-# Eval-lite (direct pipeline, demo DB)
-eval-smoke: ## Run direct pipeline smoke eval on the demo DB (no Spider needed)
-	PYTHONPATH=$$PWD \
-	PYTEST_CURRENT_TEST=1 \
-	python benchmarks/eval_lite.py --db-path demo.db
-
-# Spider eval-pro presets
-SPIDER_SPLIT ?= dev
-EVAL_PRO_LIMIT ?= 200
-EVAL_PRO_SMOKE_LIMIT ?= 20
-
-eval-pro-smoke: ## Run Spider eval-pro (smoke preset)
-	PYTHONPATH=$$PWD \
-	python benchmarks/eval_spider_pro.py --spider --split $(SPIDER_SPLIT) --limit $(EVAL_PRO_SMOKE_LIMIT)
-
-eval-pro: ## Run Spider eval-pro (default limit via EVAL_PRO_LIMIT)
-	PYTHONPATH=$$PWD \
-	python benchmarks/eval_spider_pro.py --spider --split $(SPIDER_SPLIT) --limit $(EVAL_PRO_LIMIT)
-
-# Benchmark dashboard
-PORT ?= 8501
-
-bench-ui: ## Run Streamlit benchmark dashboard (reads benchmarks/results/**/*.jsonl)
-	PYTHONPATH=$$PWD \
-	streamlit run ui/benchmark_app.py --server.port $(PORT)
-
-plot-pro: ## Plot latest Spider eval-pro results (PNG artifacts)
-	PYTHONPATH=$$PWD \
-	python benchmarks/plot_results.py
-
-
-.PHONY: demo demo-up demo-smoke demo-metrics
+# ---------- Deprecated legacy aliases ----------
+.PHONY: demo prom-up demos demo-ui-up evaluation reasoning
+demo prom-up demos demo-ui-up evaluation reasoning:
+	@echo "Deprecated target '$@'. Use 'make help' for canonical targets." 1>&2
+	@exit 2

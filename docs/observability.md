@@ -30,4 +30,4 @@ Defined in `infra/prometheus/rules.yml`:
 
 1. Start Prometheus
    ```bash
-   make prom-up
+   make infra-up

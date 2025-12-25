@@ -1,15 +1,19 @@
-# Full Stack Bring-Up Runbook (Local)
+# Full Stack Bring-Up Runbook (Docker-first Demo)
 
-This runbook brings up **everything** end-to-end:
-- FastAPI app
+This runbook brings up **everything** end-to-end using the **Docker demo stack**:
+- nl2sql API (Docker)
 - Prometheus + Grafana + Alertmanager (infra stack)
-- Smoke traffic (so dashboards have real data)
+- Demo traffic warmer (so dashboards have real data)
 - Metrics validation (Prometheus queries)
 - Gradio demo UI
 - Streamlit benchmark UI
 - Evaluation smoke
 
 > Tip: Keep **multiple terminals** open. Some commands are **blocking** by design.
+
+> Important:
+> - `make demo-up` starts the **Docker demo stack** (single source of truth).
+> - Local dev (uvicorn) is separate (`make dev-up`) and should not run alongside the demo stack unless you know what you’re doing.
 
 ---
 
@@ -19,7 +23,7 @@ This runbook brings up **everything** end-to-end:
 docker --version
 docker compose version
 python3 --version
-```
+````
 
 (Optional but recommended)
 
@@ -39,12 +43,12 @@ make install
 
 ---
 
-## 1) Start infra (Prometheus + Grafana + Alertmanager)
+## 1) Start demo stack (API + Prometheus + Grafana)
 
 **Terminal A**
 
 ```bash
-make infra-up
+make demo-up
 make infra-ps
 ```
 
@@ -56,18 +60,9 @@ curl -fsS http://127.0.0.1:3000/api/health && echo "GRAFANA READY ✅"
 ```
 
 Open in browser:
-- Grafana: http://127.0.0.1:3000
-- Prometheus: http://127.0.0.1:9090
 
----
-
-## 2) Start the API (FastAPI)
-
-**Terminal B**
-
-```bash
-make demo-up
-```
+* Grafana: [http://127.0.0.1:3000](http://127.0.0.1:3000)
+* Prometheus: [http://127.0.0.1:9090](http://127.0.0.1:9090)
 
 API health:
 
@@ -77,23 +72,21 @@ make curl-health
 
 ---
 
-## 3) Generate real traffic (Smoke)
+## 2) Generate real traffic (recommended for dashboards / screenshots)
 
-**Terminal C**
+**Terminal B**
 
 ```bash
-make demo-smoke
+make demo-traffic-up
 ```
 
-Expected:
-- “normal” NL queries return `HTTP 200`
-- unsafe input (e.g., DELETE) is blocked, but the smoke should still pass ✅
+This runs a small in-docker traffic generator so Prometheus sees real events (avoids “0” / “No data”).
 
 ---
 
-## 4) Validate Prometheus signals (recording rules + queries)
+## 3) Validate Prometheus signals (queries)
 
-**Terminal C**
+**Terminal B**
 
 ```bash
 make demo-metrics
@@ -107,23 +100,39 @@ make curl-metrics
 
 ---
 
+## 4) API smoke (correctness check)
+
+Run smoke only when you want to verify behavior end-to-end:
+
+```bash
+make demo-smoke
+```
+
+Expected:
+
+* “normal” NL queries return `HTTP 200`
+* unsafe input (e.g., DELETE) is blocked, but smoke should still pass ✅
+
+---
+
 ## 5) Grafana sanity (avoid “No data”)
 
 In Grafana:
-- Time range: **Last 15m**
-- Refresh: **Off**
-- Confirm at least **stage latency** and **events** panels have data.
 
-> If success ratios look ugly/unstable, don’t screenshot them for the README.
+* Time range: **Last 15m**
+* Refresh: **Off**
+* Confirm at least stage latency and events panels have data.
+
+> Tip: If traffic is low, prefer window-based panels (e.g., ratios using `increase(...)`).
 
 ---
 
 ## 6) Run Gradio demo UI (optional)
 
-**Terminal D**
+**Terminal C**
 
 ```bash
-make demo-ui-up
+make demo-up
 ```
 
 (Gradio will print a local URL.)
@@ -132,7 +141,7 @@ make demo-ui-up
 
 ## 7) Run Benchmark UI (Streamlit)
 
-**Terminal E**
+**Terminal D**
 
 ```bash
 make bench-ui
@@ -158,10 +167,16 @@ make eval-pro
 
 ## 9) Shut down
 
-Stop infra:
+Stop demo traffic (if running):
 
 ```bash
-make infra-down
+make demo-traffic-down
+```
+
+Stop demo stack:
+
+```bash
+make demo-down
 ```
 
 Clean docker artifacts (careful; may remove volumes):
@@ -175,13 +190,15 @@ make clean-docker
 ## Troubleshooting
 
 ### Prometheus connection refused
-Infra isn’t up:
+
+Demo stack isn’t up:
 
 ```bash
-make infra-up
+make demo-up
 ```
 
 ### Grafana shows “No data”
+
 Check Prometheus targets:
 
 ```bash
@@ -191,7 +208,21 @@ curl -fsS "http://127.0.0.1:9090/api/v1/targets" | head -c 2000
 Look for `job=nl2sql` with `health=up`.
 
 ### Ports
+
 Common ports:
-- API: 8000
-- Prometheus: 9090
-- Grafana: 3000
+
+* API (Docker demo): 8000
+* Prometheus: 9090
+* Grafana: 3000
+
+---
+
+## Local development (separate from demo)
+
+If you want local uvicorn for dev/debug:
+
+```bash
+make dev-up
+```
+
+This is **not part of the demo stack**.
