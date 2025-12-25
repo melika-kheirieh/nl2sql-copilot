@@ -1,70 +1,85 @@
-# Full Stack Bring-Up Runbook (Docker-first Demo)
+# 🧭 NL2SQL Copilot — Demo Runbook (Canonical)
 
-This runbook brings up **everything** end-to-end using the **Docker demo stack**:
-- nl2sql API (Docker)
-- Prometheus + Grafana + Alertmanager (infra stack)
-- Demo traffic warmer (so dashboards have real data)
-- Metrics validation (Prometheus queries)
-- Gradio demo UI
-- Streamlit benchmark UI
-- Evaluation smoke
+**Scope**
+This runbook documents **only the Docker demo stack**.
 
-> Tip: Keep **multiple terminals** open. Some commands are **blocking** by design.
+* Local development (`uvicorn`, `make dev-up`) is **explicitly out of scope**
+* This document is **operational**, not educational
+* Audience: reviewer, infra-minded engineer, future you
 
-> Important:
-> - `make demo-up` starts the **Docker demo stack** (single source of truth).
-> - Local dev (uvicorn) is separate (`make dev-up`) and should not run alongside the demo stack unless you know what you’re doing.
+**Single Source of Truth**
+
+* `Makefile` (canonical targets only)
+* `docker-compose.yml` (demo stack implementation)
+
+If a command appears here, it **exists and is canonical**.
+If it does not exist in the Makefile, it **must not appear here**.
 
 ---
 
-## Prerequisites
+## 🧠 Mental Model (Read This First)
+
+This project is **demo-first**, not dev-first.
+
+Key principles:
+
+* `make demo-up` brings up the **entire real system**
+* Some failures are **intentional guardrails**
+* Low cache hit ratio at start is **expected**
+* 4xx / 5xx responses are **not automatically bugs**
+
+If you approach this like a toy demo, things will look “wrong”.
+They are not.
+
+---
+
+## 0️⃣ Golden Path (10-minute, reviewer-proof)
+
+This is the **minimum trusted path**.
 
 ```bash
-docker --version
-docker compose version
-python3 --version
-````
-
-(Optional but recommended)
-
-```bash
-cp .env.example .env
-# edit .env if you want (API keys, etc.)
+make clean-docker
+make demo-up
+make demo-smoke
 ```
 
+### Expected behavior
+
+* Valid NL queries → `HTTP 200`
+* Unsafe intent (DELETE / UPDATE / etc.) → blocked
+* Smoke still **PASS**
+
+If this fails:
+
+* Either the system is broken
+* Or the documentation is lying
+
+Both are unacceptable.
+
 ---
 
-## 0) One-time (recommended) — Python deps
-
-```bash
-make venv
-make install
-```
-
----
-
-## 1) Start demo stack (API + Prometheus + Grafana)
-
-**Terminal A**
+## 1️⃣ Bring up the demo stack
 
 ```bash
 make demo-up
+```
+
+This is the **single source of truth** for the demo.
+
+It brings up:
+
+* NL2SQL API (Docker)
+* Prometheus
+* Grafana
+* Alertmanager (if enabled)
+
+Verify containers:
+
+```bash
 make infra-ps
 ```
 
-Health checks:
-
-```bash
-curl -fsS http://127.0.0.1:9090/-/ready && echo "PROM READY ✅"
-curl -fsS http://127.0.0.1:3000/api/health && echo "GRAFANA READY ✅"
-```
-
-Open in browser:
-
-* Grafana: [http://127.0.0.1:3000](http://127.0.0.1:3000)
-* Prometheus: [http://127.0.0.1:9090](http://127.0.0.1:9090)
-
-API health:
+Verify API health:
 
 ```bash
 make curl-health
@@ -72,106 +87,118 @@ make curl-health
 
 ---
 
-## 2) Generate real traffic (recommended for dashboards / screenshots)
+## 2️⃣ Observability sanity check
 
-**Terminal B**
-
-```bash
-make demo-traffic-up
-```
-
-This runs a small in-docker traffic generator so Prometheus sees real events (avoids “0” / “No data”).
-
----
-
-## 3) Validate Prometheus signals (queries)
-
-**Terminal B**
-
-```bash
-make demo-metrics
-```
-
-If you want to quickly confirm the app is exposing metrics:
+Metrics endpoint:
 
 ```bash
 make curl-metrics
 ```
 
+Grafana:
+
+* URL: `http://127.0.0.1:3000`
+* Time range: **Last 15m**
+* Refresh: **Off**
+
+Expected:
+
+* Stage latency panels have data
+* Ratios may be noisy or low (normal with small workload)
+
 ---
 
-## 4) API smoke (correctness check)
+## 3️⃣ Intentional demo behavior (this is not a bug)
 
-Run smoke only when you want to verify behavior end-to-end:
+The following behaviors are **by design**:
+
+* Non-SELECT intent is blocked early (safety guardrail)
+* Cache hit ratio starts low
+* Some errors are mapped and returned as contract-based failures
+
+If these behaviors disappear, the pipeline is **less correct**, not more.
+
+---
+
+## 4️⃣ API smoke (end-to-end correctness)
 
 ```bash
 make demo-smoke
 ```
 
-Expected:
+This validates:
 
-* “normal” NL queries return `HTTP 200`
-* unsafe input (e.g., DELETE) is blocked, but smoke should still pass ✅
+* Full pipeline execution
+* Safety enforcement
+* Verifier behavior
+* Error mapping semantics
 
----
+Intentional failures are treated as **PASS**.
 
-## 5) Grafana sanity (avoid “No data”)
-
-In Grafana:
-
-* Time range: **Last 15m**
-* Refresh: **Off**
-* Confirm at least stage latency and events panels have data.
-
-> Tip: If traffic is low, prefer window-based panels (e.g., ratios using `increase(...)`).
+Any unexpected failure here is a real issue.
 
 ---
 
-## 6) Run Gradio demo UI (optional)
+## 5️⃣ UI layers (optional, real backend)
 
-**Terminal C**
+### Gradio demo (user-facing)
+
+Gradio talks to the **real running backend**.
+No mocks. No stubs.
 
 ```bash
 make demo-up
 ```
 
-(Gradio will print a local URL.)
+Gradio characteristics:
+
+* Real API
+* Real metrics
+* Real error contracts
 
 ---
 
-## 7) Run Benchmark UI (Streamlit)
-
-**Terminal D**
+### Benchmark UI (Streamlit)
 
 ```bash
 make bench-ui
 ```
 
+Purpose:
+
+* Inspect benchmark results
+* Visualization only
+
+Not:
+
+* A correctness gate
+* A user demo
+
 ---
 
-## 8) Run evaluation smoke
+## 6️⃣ Evaluation
+
+### Smoke evaluation
 
 ```bash
 make eval-smoke
 ```
 
-(Optional “pro” mode)
+### Pro evaluation (optional)
 
 ```bash
 make eval-pro-smoke
-# or
 make eval-pro
 ```
 
+Notes:
+
+* Spider dataset is intentionally **not** committed
+* Smoke evaluation remains meaningful without Spider
+
 ---
 
-## 9) Shut down
-
-Stop demo traffic (if running):
-
-```bash
-make demo-traffic-down
-```
+## 7️⃣ Shutdown and reset
 
 Stop demo stack:
 
@@ -179,50 +206,64 @@ Stop demo stack:
 make demo-down
 ```
 
-Clean docker artifacts (careful; may remove volumes):
+Full cleanup (containers, volumes):
 
 ```bash
 make clean-docker
 ```
 
+⚠️ This removes Docker volumes.
+
 ---
 
-## Troubleshooting
+## 8️⃣ Explicitly out of scope
 
-### Prometheus connection refused
+The following are **intentionally excluded** from this runbook:
 
-Demo stack isn’t up:
+* `uvicorn`
+* `make dev-up`
+* Local debugging workflows
+* Ad-hoc Docker commands
 
-```bash
-make demo-up
-```
+Reason:
+This runbook exists for **demo, release, and review**, not development.
+
+---
+
+## 🧨 Troubleshooting (minimal, opinionated)
 
 ### Grafana shows “No data”
 
-Check Prometheus targets:
+* Set time range to **Last 15m**
+* Run `make demo-smoke` to generate traffic
 
-```bash
-curl -fsS "http://127.0.0.1:9090/api/v1/targets" | head -c 2000
-```
+### 500 response
 
-Look for `job=nl2sql` with `health=up`.
+* Unsafe query → expected
+* Pipeline crash → bug
 
-### Ports
+### Confusion between dev and demo
 
-Common ports:
-
-* API (Docker demo): 8000
-* Prometheus: 9090
-* Grafana: 3000
+* You are operating outside this runbook
 
 ---
 
-## Local development (separate from demo)
+## ✅ Contract Summary
 
-If you want local uvicorn for dev/debug:
+If this works:
 
 ```bash
-make dev-up
+make clean-docker
+make demo-up
+make demo-smoke
 ```
 
-This is **not part of the demo stack**.
+Then the project is:
+
+* Demo-ready
+* Reviewer-ready
+* Release-ready
+
+If not:
+
+* Either the code or the docs must change

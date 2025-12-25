@@ -28,7 +28,7 @@ make eval-smoke
 
 ### Output
 
-* Results are written under:
+Results are written under:
 
 ```text
 benchmarks/results/
@@ -40,8 +40,8 @@ benchmarks/results/
 
 **Use case**: benchmark NL2SQL performance on a standard dataset.
 
-> Spider is not included in the repository.
-> You must download/prepare it locally.
+> The Spider dataset is **not included** in this repository.
+> You must download and prepare it locally.
 
 ### Run a small smoke subset
 
@@ -49,7 +49,7 @@ benchmarks/results/
 make eval-pro-smoke
 ```
 
-### Run a bigger batch
+### Run a larger batch
 
 ```bash
 make eval-pro
@@ -57,7 +57,7 @@ make eval-pro
 
 ### Output
 
-* Results are written under:
+Results are written under:
 
 ```text
 benchmarks/results_pro/
@@ -91,9 +91,13 @@ http://localhost:8501
   * failure modes (ambiguous questions, safety blocks, verification failures),
   * repair recovery rate,
   * latency distribution,
-  * and overall stability across runs.
+  * overall stability across repeated runs.
+* Some queries may be **intentionally blocked** by safety or cost guardrails
+  (e.g. full table scans without `LIMIT`).
+  These failures represent **expected behavior**, not regressions.
 
-If you change prompts, model, or verification logic, you should re-run the same evaluation and compare distributions rather than single-point numbers.
+If you change prompts, models, or verification logic, re-run the same evaluation
+and compare **distributions and trends**, not single-point numbers.
 
 ---
 
@@ -101,4 +105,5 @@ If you change prompts, model, or verification logic, you should re-run the same 
 
 * Keep the model name and key settings stable while comparing changes.
 * Run the same command multiple times and compare aggregate behavior.
-* Use the dashboard and logs to understand *why* a run failed, not just *that* it failed.
+* Use logs, traces, and the dashboard to understand *why* a run failed,
+  not just *that* it failed.
