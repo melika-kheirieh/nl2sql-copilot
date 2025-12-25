@@ -58,9 +58,8 @@ def load_cfg() -> Cfg:
     api_base = os.getenv("API_BASE", "http://127.0.0.1:8000").rstrip("/")
     api_key = os.getenv("API_KEY", "dev-key")
     db_path = os.getenv("DB_PATH", "/tmp/nl2sql_dbs/smoke_demo.sqlite")
-    prom_base = os.getenv("PROM_BASE", "http://127.0.0.1:9090").rstrip("/")
-    if prom_base == "":
-        prom_base = None
+    prom_base_env = os.getenv("PROM_BASE", "http://127.0.0.1:9090").rstrip("/")
+    prom_base: str | None = prom_base_env if prom_base_env else None
     return Cfg(api_base=api_base, api_key=api_key, db_path=db_path, prom_base=prom_base)
 
 
@@ -264,6 +263,8 @@ def print_cache_sanity(cfg: Cfg) -> None:
     for expr in candidates:
         try:
             data = prom_instant_query(cfg, expr)
+            if data is None:
+                continue
         except Exception:
             continue
         try:
