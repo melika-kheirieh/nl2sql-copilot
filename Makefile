@@ -24,6 +24,7 @@ PORT ?= 8501
 
 API_BASE ?= http://$(APP_HOST):$(APP_PORT)
 API_KEY  ?= dev-key
+export API_KEY
 
 PROMETHEUS_URL ?= http://127.0.0.1:9090
 GRAFANA_URL    ?= http://127.0.0.1:3000
@@ -225,3 +226,9 @@ demo-metrics: prom-ready ## Validate Prometheus signals
 .PHONY: clean-docker
 clean-docker: ## Remove docker artifacts (careful)
 	docker system prune -f
+
+# ---------- Deprecated legacy aliases ----------
+.PHONY: demo prom-up demos demo-ui-up evaluation reasoning
+demo prom-up demos demo-ui-up evaluation reasoning:
+	@echo "Deprecated target '$@'. Use 'make help' for canonical targets." 1>&2
+	@exit 2
