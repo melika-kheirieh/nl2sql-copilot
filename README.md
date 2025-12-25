@@ -63,38 +63,61 @@ A live interactive demo is available on Hugging Face Spaces:
 
 ## Quickstart (Local)
 
-### 1) Install
+This repo is **demo-first**: `make demo-up` brings up the **real** Docker stack (API + Prometheus + Grafana).
+For the full operational checklist (traffic warmer, metrics queries, UIs, eval), see **docs/runbook.md**.
+
+### 1) Install (one-time)
 
 ```bash
+make venv
 make install
 ```
 
-### 2) Run API (Terminal 1)
+### 2) Run the demo stack (Terminal 1)
 
 ```bash
 make demo-up
 ```
 
-### 3) Smoke (Terminal 2)
+### 3) Smoke test (Terminal 2)
 
 ```bash
 make demo-smoke
 ```
 
-### 4) Observability stack (optional)
+### 4) Observability (optional, but recommended for screenshots)
+
+Generate steady traffic so dashboards don’t look dead:
 
 ```bash
-make infra-up
+make demo-traffic-up
 ```
 
-Then (optional Prometheus snapshot):
+Validate key Prometheus signals:
 
 ```bash
 make demo-metrics
 ```
 
->For a complete end-to-end setup (API, infra, metrics, dashboards, UIs),
-see [docs/runbook.md](docs/runbook.md).
+Open in browser:
+
+- Grafana: http://127.0.0.1:3000 (admin / admin)
+- Prometheus: http://127.0.0.1:9090
+
+### 5) UI layers (optional)
+
+Gradio demo UI:
+
+```bash
+make demo-up
+# then run the UI entrypoint you prefer (see docs/ui.md)
+```
+
+Benchmark UI (Streamlit):
+
+```bash
+make bench-ui
+```
 
 ---
 
