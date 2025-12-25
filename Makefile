@@ -27,6 +27,10 @@ API_BASE ?= http://$(APP_HOST):$(APP_PORT)
 API_KEY ?= $(OPENAI_API_KEY)
 API_KEY ?= $(PROXY_API_KEY)
 export API_KEY
+APP_API_KEY ?= $(API_KEYS)
+APP_API_KEY ?= dev-key
+export APP_API_KEY
+
 PROMETHEUS_URL ?= http://127.0.0.1:9090
 GRAFANA_URL    ?= http://127.0.0.1:3000
 
@@ -215,12 +219,23 @@ prom-ready: ## Check Prometheus readiness
 
 .PHONY: grafana-ready
 grafana-ready: ## Check Grafana readiness
-	curl -fsS $(GRAFANA_URL)/api/health >/dev/null
+	@echo "Waiting for Grafana..."
+	@i=0; \
+	while [ $$i -lt 40 ]; do \
+	  if curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1; then \
+	    echo "✅ Grafana ready"; exit 0; \
+	  fi; \
+	  i=$$((i+1)); \
+	  sleep 1; \
+	done; \
+	echo "❌ Grafana not ready after 40s" 1>&2; \
+	docker logs nl2sql-grafana --tail 120 || true; \
+	exit 2
 
 # ---------- Smoke / Metrics ----------
 .PHONY: demo-smoke
 demo-smoke: require-api-key ## Run API smoke (Docker demo)
-	API_BASE="$(API_BASE)" API_KEY="$(API_KEY)" \
+	API_BASE="$(API_BASE)" API_KEY="$(APP_API_KEY)" \
 	$(PY) scripts/smoke_api.py
 
 .PHONY: demo-metrics
