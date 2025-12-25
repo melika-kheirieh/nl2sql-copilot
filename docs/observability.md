@@ -1,30 +1,33 @@
 # Observability and Metrics
 
-This document describes the **metrics actually emitted at runtime** by the
-NL2SQL Copilot pipeline, and how they are intended to be interpreted.
+This document describes the **metrics exposed at runtime** by the NL2SQL Copilot
+pipeline and how they should be interpreted.
 
 The goal is **truthful observability**:
-everything documented here can be verified via `/metrics`.
+everything documented here can be verified via `/metrics`, and counters that
+remain zero are explicitly called out.
 
 ---
 
 ## 📊 Metrics exposed
 
-| Metric | Type | Labels | Description |
-|------|------|--------|-------------|
-| `stage_duration_ms` | histogram | `stage` | Duration per pipeline stage: `detector`, `planner`, `generator`, `safety`, `executor`, `verifier`, `pipeline_total`, `repair` |
-| `stage_calls_total` | counter | `stage`, `ok` | Number of executions per stage, split by success/failure |
-| `stage_errors_total` | counter | `stage`, `error_code` | Stage-level errors grouped by error code |
-| `pipeline_runs_total` | counter | `status` | Pipeline runs by outcome: `ok`, `error`, `ambiguous` |
-| `safety_checks_total` | counter | `ok` | Safety checks pass/fail count |
-| `verifier_checks_total` | counter | `ok` | Verification pass/fail count |
-| `cache_events_total` | counter | `hit` | Cache hit/miss events |
+| Metric                  | Type      | Labels                | Description                                                                                                                   |
+| ----------------------- | --------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `stage_duration_ms`     | histogram | `stage`               | Duration per pipeline stage: `detector`, `planner`, `generator`, `safety`, `executor`, `verifier`, `repair`, `pipeline_total` |
+| `stage_calls_total`     | counter   | `stage`, `ok`         | Number of executions per stage, split by success/failure                                                                      |
+| `stage_errors_total`    | counter   | `stage`, `error_code` | Stage-level errors grouped by error code                                                                                      |
+| `pipeline_runs_total`   | counter   | `status`              | Pipeline runs by outcome: `ok`, `error`, `ambiguous`                                                                          |
+| `safety_checks_total`   | counter   | `ok`                  | Safety checks pass/fail count (may remain zero; see notes below)                                                              |
+| `verifier_checks_total` | counter   | `ok`                  | Verification pass/fail count (may remain zero; see notes below)                                                               |
+| `cache_events_total`    | counter   | `hit`                 | Cache hit/miss events                                                                                                         |
 
-All metrics above are **actively emitted** and visible via:
+All metrics above are **defined and exposed** via:
 
 ```bash
 curl -fsS http://127.0.0.1:8000/metrics
-````
+```
+
+Some counters may remain zero unless triggered by specific stages (see below).
 
 ---
 
@@ -47,7 +50,7 @@ infra/prometheus/rules.yml
 ### Alerts
 
 * **`PipelineLowSuccessRatio`**
-  Triggered when success ratio drops below threshold for a sustained window.
+  Triggered when the success ratio drops below a threshold for a sustained window.
 
 * **`GeneratorLatencyHigh`**
   Triggered when generator p95 latency exceeds the configured bound.
@@ -60,14 +63,14 @@ infra/prometheus/rules.yml
 
 ## 🧪 Local verification
 
-To verify that metrics are being emitted correctly:
+To verify that metrics are being exposed correctly:
 
 ```bash
 make demo-up
 make curl-metrics
 ```
 
-To inspect targets and rule evaluation:
+To inspect Prometheus targets and rule evaluation:
 
 ```bash
 curl -fsS "http://127.0.0.1:9090/api/v1/targets"
@@ -75,10 +78,11 @@ curl -fsS "http://127.0.0.1:9090/api/v1/targets"
 
 ---
 
-## 🛠 Planned metrics (not emitted yet)
+## 🛠 Defined metrics (currently not incremented)
 
-The following metrics are part of the **intended observability design**,
-but are **not currently emitted** by the system:
+The following series are **defined and visible** in `/metrics`, but may remain
+**zero** in the current implementation because they are not incremented by the
+pipeline stages yet:
 
 * `safety_blocks_total{reason=...}`
   Breakdown of blocked queries by safety rule.
@@ -86,8 +90,8 @@ but are **not currently emitted** by the system:
 * `verifier_failures_total{reason=...}`
   Verification failures grouped by reason.
 
-These may be added in future iterations once label semantics and aggregation
-strategy are finalized.
+Dashboard panels referencing these counters may therefore show no activity; this
+is expected and does **not** indicate a metrics wiring issue.
 
 ---
 
@@ -100,5 +104,5 @@ strategy are finalized.
 * Always prefer **distributions and trends** (p95, ratios, windows) over
   single-point values.
 
-If you change prompts, models, or pipeline structure, re-evaluate metrics
-and dashboards accordingly.
+If you change prompts, models, or pipeline structure, re-evaluate metrics and
+dashboards accordingly.
