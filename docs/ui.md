@@ -9,7 +9,7 @@ The screenshots below are taken from the live Hugging Face deployment.
 
 ## Minimal End-to-End Demo
 
-![Minimal demo](assets/screenshots//hf_minimal_demo.png)
+![Minimal demo](assets/screenshots/hf_minimal_demo.png)
 
 **Purpose**
 Demonstrates the full NL → SQL → Result flow in a minimal, readable form.
@@ -25,7 +25,7 @@ This view is intentionally minimal and is used as the main screenshot in the REA
 
 ## Result View
 
-![Result view](assets/screenshots//hf_result_view.png)
+![Result view](assets/screenshots/hf_result_view.png)
 
 **Purpose**
 Shows the final, verified execution result of the generated SQL.
@@ -39,7 +39,7 @@ Shows the final, verified execution result of the generated SQL.
 
 ## Trace View
 
-![Trace view](assets/screenshots//hf_trace_view.png)
+![Trace view](assets/screenshots/hf_trace_view.png)
 
 **Purpose**
 Exposes the internal, stage-by-stage execution trace of the pipeline.
@@ -55,7 +55,7 @@ This view exists to make reasoning and debugging explicit rather than implicit.
 
 ## Repair View
 
-![Repair view](assets/screenshots//hf_repair_view.png)
+![Repair view](assets/screenshots/hf_repair_view.png)
 
 **Purpose**
 Documents the self-healing (repair) behavior of the pipeline.
@@ -72,7 +72,7 @@ and candidate comparisons are planned.
 
 ## Timings View
 
-![Timings view](assets/screenshots//hf_timings_view.png)
+![Timings view](assets/screenshots/hf_timings_view.png)
 
 **Purpose**
 Shows latency breakdown across pipeline stages.

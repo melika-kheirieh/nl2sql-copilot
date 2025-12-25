@@ -20,6 +20,8 @@ APP_HOST ?= 127.0.0.1
 APP_PORT ?= 8000
 DEV_PORT ?= 8001
 
+PORT ?= 8501
+
 API_BASE ?= http://$(APP_HOST):$(APP_PORT)
 API_KEY  ?= dev-key
 
@@ -67,7 +69,6 @@ test: ## Run tests
 cov: ## Run tests with coverage (HTML + terminal)
 	PYTHONPATH=$$PWD pytest -qq --cov=app --cov-report=term-missing --cov-report=html
 
-
 .PHONY: metrics-check
 metrics-check: ## Verify Prometheus rules + Grafana dashboards match defined metrics
 	$(PY) scripts/verify_metrics_wiring.py
@@ -77,25 +78,44 @@ qa: ## format + lint + typecheck + test + metrics-check
 	$(MAKE) format lint typecheck test metrics-check
 
 .PHONY: bench-ui
-bench-ui: ## Run benchmark UI (Streamlit) if present
+bench-ui: ## Run Streamlit benchmark dashboard
 	@set -e; \
-	if [ -f benchmarks/bench_ui.py ]; then \
-		$(STREAMLIT) run benchmarks/bench_ui.py; \
-	elif [ -f benchmarks/ui.py ]; then \
-		$(STREAMLIT) run benchmarks/ui.py; \
-	elif [ -f benchmarks/streamlit_app.py ]; then \
-		$(STREAMLIT) run benchmarks/streamlit_app.py; \
-	elif [ -f benchmarks/app.py ]; then \
-		$(STREAMLIT) run benchmarks/app.py; \
+	if [ -f ui/benchmark_app.py ]; then \
+		PYTHONPATH=$$PWD $(STREAMLIT) run ui/benchmark_app.py --server.port $(PORT); \
+	elif [ -f benchmarks/bench_ui.py ]; then \
+		PYTHONPATH=$$PWD $(STREAMLIT) run benchmarks/bench_ui.py --server.port $(PORT); \
 	else \
-		echo "❌ No Streamlit entrypoint found under benchmarks/. Looked for:"; \
-		echo "   - benchmarks/bench_ui.py"; \
-		echo "   - benchmarks/ui.py"; \
-		echo "   - benchmarks/streamlit_app.py"; \
-		echo "   - benchmarks/app.py"; \
+		echo "❌ No Streamlit entrypoint found. Expected ui/benchmark_app.py"; \
 		exit 1; \
 	fi
 
+# ---------- Benchmarks / Evaluation ----------
+DEMO_DB ?= $(if $(wildcard data/demo.db),data/demo.db,/tmp/nl2sql_dbs/smoke_demo.sqlite)
+
+.PHONY: eval-smoke
+eval-smoke: ## Run direct pipeline smoke eval on demo DB (no Spider needed)
+	PYTHONPATH=$$PWD \
+	PYTEST_CURRENT_TEST=1 \
+	python benchmarks/eval_lite.py --db-path $(DEMO_DB)
+
+SPIDER_SPLIT ?= dev
+EVAL_PRO_LIMIT ?= 200
+EVAL_PRO_SMOKE_LIMIT ?= 20
+
+.PHONY: eval-pro-smoke
+eval-pro-smoke: ## Run Spider eval-pro (smoke preset)
+	PYTHONPATH=$$PWD \
+	python benchmarks/eval_spider_pro.py --spider --split $(SPIDER_SPLIT) --limit $(EVAL_PRO_SMOKE_LIMIT)
+
+.PHONY: eval-pro
+eval-pro: ## Run Spider eval-pro (default preset)
+	PYTHONPATH=$$PWD \
+	python benchmarks/eval_spider_pro.py --spider --split $(SPIDER_SPLIT) --limit $(EVAL_PRO_LIMIT)
+
+.PHONY: plot-pro
+plot-pro: ## Plot latest Spider eval-pro results (PNG artifacts)
+	PYTHONPATH=$$PWD \
+	python benchmarks/plot_results.py
 
 # ---------- DEMO (Docker-first, SAFE) ----------
 .PHONY: demo-up
@@ -136,7 +156,6 @@ demo-screenshot: demo-zero infra-up
 	API_BASE="http://127.0.0.1:8000" API_KEY="dev-key" \
 	DB_PATH="/tmp/nl2sql_dbs/smoke_demo.sqlite" PROM_BASE="http://127.0.0.1:9090" \
 	python3 scripts/demo_cache_showcase.py
-
 
 # ---------- Local DEV (explicit, separate) ----------
 .PHONY: dev-up

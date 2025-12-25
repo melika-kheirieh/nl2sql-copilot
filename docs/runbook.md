@@ -132,7 +132,7 @@ In Grafana:
 **Terminal C**
 
 ```bash
-make demo-ui-up
+make demo-up
 ```
 
 (Gradio will print a local URL.)
