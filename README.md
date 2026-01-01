@@ -4,17 +4,17 @@
 [![Docker](https://img.shields.io/badge/docker--compose-demo-blue?logo=docker)](docs/runbook.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A **production-oriented, multi-stage Natural Language → SQL system** built around
-**explicit safety guarantees, verification, evaluation, and observability** — **not a prompt-only demo**.
+**NL2SQL Copilot** is a **safety-first NL→SQL backend system** built as a **multi-stage, testable pipeline**.
+It treats LLM outputs as **proposals** and enforces execution safety via **verification, bounded repair, evaluation, and observability**.
 
-This project treats LLMs as **untrusted components** inside a constrained, measurable system,
-and operates them through an explicit pipeline with verification and a **bounded repair loop**.
+The system is designed to operate LLMs as **untrusted components** inside a constrained, measurable backend —
+with explicit guarantees around what can be generated, executed, and returned.
 
 ---
 
 ## At a glance
 
-* **Agentic NL2SQL pipeline** with explicit planning, verification, and a bounded repair loop
+* **Multi-stage NL2SQL pipeline** with explicit planning, verification, and a bounded repair loop
 * **Safety-first execution** enforced at the system level (single-statement, SELECT-only)
 * **Failure-aware design** with verifier-driven repair and a structured error taxonomy
 * **Built-in evaluation**: lightweight smoke runs and Spider-based benchmarks with artifacts
@@ -59,6 +59,7 @@ A live interactive demo is available on Hugging Face Spaces:
 > This is a minimal end-to-end demo of the deployed system.
 > Detailed UI inspection views (trace, repair, timings) are documented in
 > [docs/ui.md](docs/ui.md).
+
 ---
 
 ## Quickstart (Local)
@@ -148,6 +149,8 @@ Detector
 → Verifier
 → Repair (bounded)
 ```
+
+>**LLM outputs are treated as proposals; the system decides what is safe to execute.**
 
 The pipeline is designed so that **failures are explicit, classified, and observable** —
 not hidden behind retries or prompt heuristics.
