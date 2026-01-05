@@ -391,26 +391,6 @@ class Pipeline:
         details: List[str] = []
         exec_result: Dict[str, Any] = {}
 
-        def _tag_last_trace_attempt(stage_name: str, attempt: int) -> None:
-            # Attach attempt metadata to the most recent trace entry for this stage.
-            for t in reversed(traces):
-                if t.get("stage") == stage_name:
-                    notes = t.get("notes") or {}
-                    if not isinstance(notes, dict):
-                        notes = {}
-                    notes["attempt"] = attempt
-                    t["notes"] = notes
-                    return
-
-        def _fallback_trace(stage_name: str, dt_ms: float, ok: bool) -> None:
-            traces.append(
-                self._mk_trace(
-                    stage=stage_name,
-                    duration_ms=dt_ms,
-                    summary=("ok" if ok else "failed"),
-                )
-            )
-
         schema_preview = schema_preview or ""
         clarify_answers = clarify_answers or {}
 
